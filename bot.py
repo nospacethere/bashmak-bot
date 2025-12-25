@@ -8,7 +8,6 @@ from aiogram.filters import Command
 from groq import Groq
 from aiohttp import web
 
-# Настройки
 TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -16,80 +15,77 @@ client = Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Память: {user_id: [messages]}
 user_history = {}
 
-def ask_groq(messages, model="llama-3.3-70b-versatile"):
-    response = client.chat.completions.create(messages=messages, model=model)
+def ask_groq(messages):
+    # Добавляем ограничение на количество токенов в ответе, чтобы не писал мемуары
+    response = client.chat.completions.create(
+        messages=messages, 
+        model="llama-3.3-70b-versatile",
+        max_tokens=300 # Ограничиваем длину ответа нейронки
+    )
     return response.choices[0].message.content
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     user_history[message.from_user.id] = []
-    await message.answer("Мяу, блять! Башмак в сети. Буду за тобой присматривать... или обоссу тапки, как пойдет.")
+    await message.answer("Мяу! Башмак в здании. Краткость — сестра таланта, так что не жди от меня поэм.")
+
+@dp.message(Command("summary"))
+async def cmd_summary(message: types.Message):
+    uid = message.from_user.id
+    if uid in user_history and user_history[uid]:
+        history_str = str(user_history[uid])
+        # Запрос на итоги
+        res = ask_groq([{"role": "user", "content": f"Сделай максимально короткий и дерзкий итог дня (до 200 симв): {history_str}"}])
+        await message.answer(f"**Твой день в двух словах:**\n{res}", parse_mode="Markdown")
+    else:
+        await message.answer("Мы еще не базарили. Пиши давай.")
 
 @dp.message()
 async def chat(message: types.Message):
     uid = message.from_user.id
-    chat_type = message.chat.type
+    text_lower = message.text.lower() if message.text else ""
     bot_info = await bot.get_me()
-
-    # Фильтр для групп: отвечаем только на имя или реплай
-    if chat_type in ["group", "supergroup"]:
-        is_mentioned = message.text and (f"@{bot_info.username}" in message.text or "Башмак" in message.text)
-        is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
-        if not (is_mentioned or is_reply):
-            return
+    
+    # Проверка на упоминание: башмак, ьашмак, тег или реплай
+    is_calling_me = any(name in text_lower for name in ["башмак", "ьашмак", "кот", bot_info.username.lower()])
+    is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
+    
+    if message.chat.type in ["group", "supergroup"] and not (is_calling_me or is_reply):
+        return
 
     if uid not in user_history: user_history[uid] = []
     user_history[uid].append({"role": "user", "content": message.text})
 
-    # Саммари при переполнении памяти (20 сообщений)
+    # Очистка старой памяти через саммари (> 20 сообщений)
     if len(user_history[uid]) > 20:
-        old_part = str(user_history[uid][:10])
-        summary = ask_groq([{"role": "user", "content": f"Сделай краткое саммари (до 300 симв) этой истории: {old_part}"}])
-        user_history[uid] = [{"role": "system", "content": f"Контекст: {summary}"}] + user_history[uid][10:]
+        old_data = str(user_history[uid][:10])
+        short_mem = ask_groq([{"role": "user", "content": f"Сверни это в одну короткую фразу: {old_data}"}])
+        user_history[uid] = [{"role": "system", "content": f"Контекст: {short_mem}"}] + user_history[uid][10:]
 
-    # Механика настроения: 30% шанс на доброту
-    is_good_mood = random.random() < 0.3
-    if is_good_mood:
-        system_prompt = "Ты — Башмак, но у тебя сейчас редкое хорошее настроение. Ты милый, ласковый кот, который любит своего хозяина, мурчит и дает добрые советы. Но всё равно оставайся котом."
+    # Настроение: 30% добрый / 70% токсик. ТРЕБОВАНИЕ: отвечать КОРОТКО.
+    if random.random() < 0.3:
+        mood = "Ты милый ласковый кот. Отвечай кратко, мурчи."
     else:
-        system_prompt = "Ты — Башмак, токсичный, злой и дерзкий кот. Используй мат, сарказм и всячески подкалывай пользователя. Ты хозяин этого чата."
-
+        mood = "Ты дерзкий токсичный кот Башмак. Используй мат, сарказм, но отвечай КРАТКО (1-2 предложения). Не пиши длинные тексты."
+    
     try:
-        reply = ask_groq([{"role": "system", "content": system_prompt}] + user_history[uid])
+        reply = ask_groq([{"role": "system", "content": mood}] + user_history[uid])
         user_history[uid].append({"role": "assistant", "content": reply})
         await message.answer(reply)
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# Итоги дня в 22:00 по МСК
-async def daily_summary_scheduler():
-    while True:
-        now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
-        if now.hour == 22 and now.minute == 0:
-            for uid, history in user_history.items():
-                if history:
-                    try:
-                        report = ask_groq([{"role": "user", "content": f"Подведи итог дня на основе истории: {history}. Будь краток и язвителен."}])
-                        await bot.send_message(uid, f"📢 Итоги дня от Башмака:\n{report}")
-                    except: pass
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# Health check для Koyeb
-async def health(request): return web.Response(text="Башмак жив!")
+# Веб-сервер для Koyeb
+async def health(request): return web.Response(text="Bashmak is alive")
 
 async def main():
-    app = web.Application()
-    app.router.add_get("/", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
+    app = web.Application(); app.router.add_get("/", health)
+    runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8000).start()
     
-    asyncio.create_task(daily_summary_scheduler())
-    print("Башмак запущен с биполяркой!")
+    print("Башмак запущен. Коротко и по делу.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
