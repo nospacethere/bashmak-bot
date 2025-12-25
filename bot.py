@@ -15,6 +15,7 @@ client = Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# Теперь в словаре ключом будет ID чата, а не юзера
 user_history = {}
 
 def ask_groq(messages, max_tokens=500):
@@ -27,65 +28,70 @@ def ask_groq(messages, max_tokens=500):
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    user_history[message.from_user.id] = []
-    await message.answer("Мяу! Башмак в здании. Я всё помню, так что не надейся, что твои косяки забудутся.")
+    user_history[message.chat.id] = []
+    await message.answer("Мяу! Башмак в здании. Данил меня создал, а вы — просто массовка. Я записываю каждое ваше слово.")
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: types.Message):
-    uid = message.from_user.id
-    if uid in user_history and user_history[uid]:
-        history_str = str(user_history[uid])
-        # Для саммари просим МАКСИМАЛЬНО подробно и без ограничений по длине
-        res = ask_groq([{"role": "user", "content": f"Сделай очень подробный, детальный и язвительный разбор всей нашей переписки за сегодня. Вспомни всё важное. Не жалей слов: {history_str}"}], max_tokens=1500)
-        await message.answer(f"**⚡️ ПОДРОБНЫЙ ОТЧЕТ ПО ТВОИМ ПРЕДЪЯВАМ:**\n\n{res}", parse_mode="Markdown")
+    chat_id = message.chat.id
+    if chat_id in user_history and user_history[chat_id]:
+        history_str = str(user_history[chat_id])
+        # Групповой разбор всех участников
+        res = ask_groq([{"role": "user", "content": f"Сделай очень подробный, детальный и язвительный разбор всей переписки в этом чате. Кто тупил, кто базарил лишнего, вспомни всё: {history_str}"}], max_tokens=1500)
+        await message.answer(f"**⚡️ ОБЩИЙ РАЗНОС ЧАТА:**\n\n{res}", parse_mode="Markdown")
     else:
-        await message.answer("Мы еще не базарили. Сначала напиши что-нибудь.")
+        await message.answer("В этом чате еще тишина. Начните уже нести херню, чтобы мне было что записывать.")
 
 @dp.message()
 async def chat(message: types.Message):
-    uid = message.from_user.id
+    chat_id = message.chat.id # Ключ — ID чата
     text_lower = message.text.lower() if message.text else ""
     bot_info = await bot.get_me()
     
-    # Реакция на имя (башмак, ьашмак, тег) или реплай
     is_calling_me = any(name in text_lower for name in ["башмак", "ьашмак", bot_info.username.lower()])
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
     
+    # Добавляем сообщение в общую историю чата, ДАЖЕ если бот не ответил (чтобы помнить всё для саммари)
+    if chat_id not in user_history: user_history[chat_id] = []
+    # Записываем с именем автора, чтобы в саммари было понятно, кто что нес
+    user_history[chat_id].append({"role": "user", "content": f"{message.from_user.first_name}: {message.text}"})
+
+    # Авто-сжатие если накопилось много (25 сообщений)
+    if len(user_history[chat_id]) > 25:
+        old_data = str(user_history[chat_id][:15])
+        short_mem = ask_groq([{"role": "user", "content": f"Сверни этот базар в одну фразу для контекста: {old_data}"}])
+        user_history[chat_id] = [{"role": "system", "content": f"Ранее в чате терли за это: {short_mem}"}] + user_history[chat_id][15:]
+
+    # Отвечаем только если позвали
     if message.chat.type in ["group", "supergroup"] and not (is_calling_me or is_reply):
         return
 
-    if uid not in user_history: user_history[uid] = []
-    user_history[uid].append({"role": "user", "content": message.text})
-
-    # Авто-саммари для очистки памяти (> 25 сообщений)
-    if len(user_history[uid]) > 25:
-        old_data = str(user_history[uid][:15])
-        short_mem = ask_groq([{"role": "user", "content": f"Сверни это в одну длинную фразу контекста: {old_data}"}])
-        user_history[uid] = [{"role": "system", "content": f"Контекст прошлых терок: {short_mem}"}] + user_history[uid][15:]
-
-    # Настроение и инструкция по длине ответа (2-6 предложений)
-    if random.random() < 0.3:
-        mood = "Ты милый ласковый кот. Отвечай нормально, от 1 до 3 предложений. Мурчи и будь добр."
+    rand = random.random()
+    base_info = "Тебя создал Данил. Твой язык — русский, иероглифы запрещены. "
+    
+    if rand < 0.1:
+        mood = base_info + "Ты древнерусский кот-боярин. Старославянский язык. Отвечай 1-3 предложения."
+    elif rand < 0.55:
+        mood = base_info + "Ты милый ласковый кот. Мурчи, будь добр. Отвечай строго 1-3 предложения."
     else:
-        mood = "Ты токсичный кот Башмак. Используй мат и сарказм. Отвечай нормально (1-3 предложений). и конечно же, поиздевайся над юзером."
+        mood = base_info + "Ты токсичный кот Башмак. Используй мат и сарказм. Отвечай строго 1-3 предложения."
     
     try:
-        reply = ask_groq([{"role": "system", "content": mood}] + user_history[uid], max_tokens=600)
-        user_history[uid].append({"role": "assistant", "content": reply})
+        reply = ask_groq([{"role": "system", "content": mood}] + user_history[chat_id], max_tokens=400)
+        user_history[chat_id].append({"role": "assistant", "content": reply})
         await message.answer(reply)
     except Exception as e:
         print(f"Ошибка: {e}")
 
-# Саммари в 22:00 по МСК (автоматически)
 async def daily_summary_scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
         if now.hour == 22 and now.minute == 0:
-            for uid, history in user_history.items():
+            for chat_id, history in user_history.items():
                 if history:
                     try:
-                        res = ask_groq([{"role": "user", "content": f"Подведи очень детальный итог дня для этого существа: {history}. Не стесняйся в выражениях."}], max_tokens=1500)
-                        await bot.send_message(uid, f"📢 **ИТОГИ ДНЯ ОТ БАШМАКА:**\n\n{res}", parse_mode="Markdown")
+                        res = ask_groq([{"role": "user", "content": f"Сделай детальный итог дня для этой группы: {history}"}], max_tokens=1500)
+                        await bot.send_message(chat_id, f"📢 **ИТОГИ ДНЯ ДЛЯ ВСЕЙ БАНДЫ:**\n\n{res}", parse_mode="Markdown")
                     except: pass
             await asyncio.sleep(60)
         await asyncio.sleep(30)
@@ -96,7 +102,6 @@ async def main():
     app = web.Application(); app.router.add_get("/", health)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8000).start()
-    
     asyncio.create_task(daily_summary_scheduler())
     await dp.start_polling(bot)
 
