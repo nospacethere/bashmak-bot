@@ -1,12 +1,12 @@
 import os
 import asyncio
-import datetime
-import pytz
+import base64
 import random
 from collections import deque
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ChatType
+from aiogram.types import BotCommand
 from groq import Groq
 from aiohttp import web
 
@@ -18,129 +18,100 @@ client = Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-bot_id = None
-
 # --- ПАМЯТЬ ---
 user_history = {} 
 
 def get_history(chat_id):
     if chat_id not in user_history:
-        user_history[chat_id] = deque(maxlen=50)
+        user_history[chat_id] = deque(maxlen=20) # Уменьшил историю для четкости
     return user_history[chat_id]
 
-async def ask_groq_async(messages, max_tokens=1000, temperature=0.8):
+async def ask_groq_async(messages, model="llama-3.3-70b-versatile", temp=0.7):
     loop = asyncio.get_running_loop()
     def _request():
         try:
             return client.chat.completions.create(
-                messages=messages, 
-                model="llama-3.3-70b-versatile",
-                max_tokens=max_tokens,
-                temperature=temperature
+                messages=messages, model=model, max_tokens=150, temperature=temp
             ).choices[0].message.content
-        except Exception as e:
-            print(f"Groq Error: {e}")
-            return "У меня временный паралич мозжечка. Спроси позже."
-    
+        except: return "Мозг кота временно недоступен."
     return await loop.run_in_executor(None, _request)
 
+# --- ФОТО (ВИДИТ И КОММЕНТИРУЕТ) ---
+@dp.message(F.photo)
+async def handle_photo(message: types.Message):
+    is_evil = random.choice([True, False])
+    mood = "Ты — токсичный критик, разнеси то, что видишь." if is_evil else "Ты — саркастичный кот, похвали это, но с подколом."
+    
+    try:
+        await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+        photo = message.photo[-1]
+        file_info = await bot.get_file(photo.file_id)
+        photo_bytes = await bot.download_file(file_info.file_path)
+        encoded = base64.b64encode(photo_bytes.read()).decode('utf-8')
+
+        prompt = (
+            "1. Коротко скажи, что именно на фото.\n"
+            f"2. {mood}\n"
+            "СТРОГО: Без скобок ))), без текста в духе (смеется). Максимум 2 предложения."
+        )
+
+        res = await ask_groq_async([
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+            ]}
+        ], model="llama-3.2-11b-vision-preview")
+        await message.reply(res)
+    except: await message.reply("Глаза заплыли, не вижу ничего.")
+
 # --- КОМАНДЫ ---
+@dp.message(Command("roast"))
+async def cmd_roast(message: types.Message):
+    history = get_history(message.chat.id)
+    if not history: return await message.answer("Чат пустой, жарить некого.")
+    
+    text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in history])
+    prompt = f"Разнеси этих людей за их тупость: {text_dump}. Пиши максимально коротко и зло. Без воды и скобок."
+    
+    res = await ask_groq_async([{"role": "user", "content": prompt}], temp=0.9)
+    await message.answer(f"☠️ **РАЗНОС:**\n{res}")
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.answer("😼 Башмак в сети. Фильтры подрезаны, ирония на максимуме. Жги.")
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Оживить"),
+        BotCommand(command="roast", description="Прожарка (коротко)"),
+    ])
+    await message.answer("😼 Башмак здесь. Кидай фото или пиши. Буду краток, как выстрел.")
 
-@dp.message(Command("roast"))
-async def cmd_roast(message: types.Message):
-    cid = message.chat.id
-    history = get_history(cid)
-    if not history:
-        await message.answer("Чат пустой, кого мне обсирать? Стены?")
-        return
-
-    text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in history])
-    
-    # Промпт переписан так, чтобы НЕ триггерить фильтры безопасности
-    prompt = (
-        f"Ты — Башмак, мастер экстремального сарказма и черного юмора. "
-        f"Перед тобой переписка этих персонажей:\n{text_dump}\n\n"
-        "Твоя задача: сделай разнос этого чата в стиле жесткого стендапа. "
-        "1. Высмеивай их логику, ошибки и само ведение диалога.\n"
-        "2. Будь максимально язвительным и циничным.\n"
-        "3. СТРОЖАЙШИЙ ЗАПРЕТ на скобки типа ')))' и действия в скобках типа '(смеется)'.\n"
-        "4. Пиши только текст от своего имени. Используй крепкое словцо, если оно уместно для шутки."
-    )
-
-    msg = await message.answer("🔥 Разогреваю сковородку...")
-    res = await ask_groq_async([{"role": "user", "content": prompt}], temperature=0.9)
-    await msg.edit_text(f"☠️ **РАЗНОС:**\n\n{res}", parse_mode="Markdown")
-
-# --- ОБРАБОТКА ЧАТА ---
+# --- ЧАТ ---
 @dp.message()
 async def chat(message: types.Message):
-    global bot_id
     if message.from_user.is_bot or not message.text: return
-
-    if not bot_id:
-        me = await bot.get_me()
-        bot_id = me.id
-
     cid = message.chat.id
-    text = message.text
-    text_lower = text.lower()
-    
     history = get_history(cid)
-    if not text.startswith('/'):
-        history.append({"role": "user", "name": message.from_user.first_name, "content": text})
+    if not message.text.startswith('/'):
+        history.append({"role": "user", "name": message.from_user.first_name, "content": message.text})
 
-    is_named = "башмак" in text_lower or "bashmak" in text_lower
-    is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_id
-    is_private = message.chat.type == ChatType.PRIVATE
+    bot_info = await bot.get_me()
+    is_named = "башмак" in message.text.lower()
+    is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
     
-    if not (is_private or is_named or is_reply):
-        return
+    if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply): return
 
-    system_prompt = (
-        "Ты — Башмак, кот Данила. Ты циничный, прямой и не терпишь тупости. "
-        "Твои ответы должны быть короткими (1-2 предложения) и острыми. "
-        "ПРАВИЛА:\n"
-        "1. НИКОГДА НЕ ИСПОЛЬЗУЙ СКОБКИ ))).\n"
-        "2. НИКАКИХ ОПИСАНИЙ ДЕЙСТВИЙ (улыбается, чешет за ухом). Это запрещено.\n"
-        "3. Если Данил просит быть прямым — будь прямым. Никакой вежливости из службы поддержки."
-    )
+    prompt = "Ты Башмак. Будь прямым, злым и ОЧЕНЬ коротким (1 фраза). Никаких скобок и пояснений действий."
+    msgs = [{"role": "system", "content": prompt}]
+    for m in list(history)[-5:]: msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
 
-    msgs = [{"role": "system", "content": system_prompt}]
-    recent = list(history)[-7:]
-    for m in recent:
-        msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
+    await bot.send_chat_action(chat_id=cid, action="typing")
+    reply = await ask_groq_async(msgs)
+    await message.reply(reply)
 
-    try:
-        await bot.send_chat_action(chat_id=cid, action="typing")
-        reply = await ask_groq_async(msgs)
-        await message.reply(reply)
-    except Exception as e:
-        print(f"Chat Error: {e}")
-
-# --- ФОН ---
-async def scheduler():
-    while True:
-        now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
-        if now.hour == 13 and now.minute == 37:
-            for cid in list(user_history.keys()):
-                try: await bot.send_dice(cid, emoji='🎰')
-                except: pass
-            await asyncio.sleep(65)
-        await asyncio.sleep(40)
-
-async def health(request): return web.Response(text="Bashmak is alive")
-
+# --- WEB ---
 async def main():
-    app = web.Application(); app.router.add_get("/", health)
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="OK"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8000).start()
-    asyncio.create_task(scheduler())
-    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())
