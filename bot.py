@@ -18,10 +18,11 @@ dp = Dispatcher()
 
 # СПИСОК СЕРВЕРОВ COBALT (Для надежности)
 COBALT_INSTANCES = [
+"https://cobalt.perennialte.ch/api/json",
     "https://api.cobalt.tools/api/json",
+    "https://cobalt.api.ghst.xyz/api/json",
     "https://co.wuk.sh/api/json",
-    "https://cobalt.xy24.eu/api/json",
-    "https://api.server.cobalt.tools/api/json"
+    "https://cobalt.nightcity.icu/api/json"
 ]
 
 # ПАМЯТЬ
@@ -232,3 +233,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__": asyncio.run(main())
+
