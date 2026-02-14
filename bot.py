@@ -38,13 +38,12 @@ ROLES = [
 # --- ФУНКЦИЯ ЗАГРУЗКИ (RapidAPI) ---
 async def download_video_rapid(url):
     if not RAPID_KEY:
-        print("ОШИБКА: RAPIDAPI_KEY не задан!")
+        print("ОШИБКА: RAPIDAPI_KEY пустой!")
         return None
     
-    # Попробуем самый стандартный путь для этого API
-    api_url = "https://social-media-video-downloader.p.rapidapi.com/smvd/get/all"
+    # АКТУАЛЬНЫЙ ЭНДПОИНТ для этого API
+    api_url = "https://social-media-video-downloader.p.rapidapi.com/smvd/get/metadata"
     
-    # Если тот не сработал, RapidAPI часто требует соответствия Host в заголовках
     headers = {
         "X-RapidAPI-Key": RAPID_KEY,
         "X-RapidAPI-Host": "social-media-video-downloader.p.rapidapi.com"
@@ -56,17 +55,17 @@ async def download_video_rapid(url):
             async with session.get(api_url, headers=headers, params=querystring, timeout=20) as response:
                 if response.status == 200:
                     data = await response.json()
-                    # Ищем ссылку в разных полях, которые они могут вернуть
+                    # Логика этого API: данные лежат в 'links'
                     links = data.get('links', [])
                     if links:
+                        # Берем первую ссылку из списка
                         return links[0].get('link')
-                    return data.get('url') or data.get('download_url')
                 elif response.status == 404:
-                    print("Ошибка 404: API не найден по этому адресу. Проверь Endpoint в RapidAPI.")
+                    print(f"Всё еще 404. Попробуй сменить эндпоинт на основной в панели RapidAPI.")
                 else:
-                    print(f"RapidAPI Error: {response.status}")
+                    print(f"RapidAPI Error {response.status}: {await response.text()}")
         except Exception as e:
-            print(f"Ошибка: {e}")
+            print(f"Ошибка запроса: {e}")
     return None
 
 # --- ЗАПРОС К МОЗГУ (Groq) ---
@@ -209,4 +208,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
