@@ -38,34 +38,37 @@ ROLES = [
 # --- ФУНКЦИЯ ЗАГРУЗКИ (RapidAPI) ---
 async def download_video_rapid(url):
     if not RAPID_KEY:
-        print("ОШИБКА: RAPIDAPI_KEY пустой!")
+        print("ОШИБКА: RAPIDAPI_KEY не задан в Koyeb!")
         return None
     
-    # АКТУАЛЬНЫЙ ЭНДПОИНТ для этого API
-    api_url = "https://social-media-video-downloader.p.rapidapi.com/smvd/get/metadata"
+    api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
     
     headers = {
-        "X-RapidAPI-Key": RAPID_KEY,
-        "X-RapidAPI-Host": "social-media-video-downloader.p.rapidapi.com"
+        "Content-Type": "application/json",
+        "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com",
+        "x-rapidapi-key": RAPID_KEY
     }
-    querystring = {"url": url}
+    
+    # Строго по твоему curl
+    payload = {"url": url}
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(api_url, headers=headers, params=querystring, timeout=20) as response:
+            async with session.post(api_url, json=payload, headers=headers, timeout=20) as response:
+                print(f"DEBUG: Статус ответа API: {response.status}")
                 if response.status == 200:
                     data = await response.json()
-                    # Логика этого API: данные лежат в 'links'
-                    links = data.get('links', [])
-                    if links:
-                        # Берем первую ссылку из списка
-                        return links[0].get('link')
-                elif response.status == 404:
-                    print(f"Всё еще 404. Попробуй сменить эндпоинт на основной в панели RapidAPI.")
+                    # В этом API ссылки лежат в списке 'medias'
+                    medias = data.get('medias', [])
+                    if medias:
+                        # Берем самую первую ссылку (обычно это видео)
+                        video_url = medias[0].get('url')
+                        return video_url
                 else:
-                    print(f"RapidAPI Error {response.status}: {await response.text()}")
+                    err = await response.text()
+                    print(f"DEBUG: Ошибка API: {err}")
         except Exception as e:
-            print(f"Ошибка запроса: {e}")
+            print(f"DEBUG: Ошибка при запросе: {e}")
     return None
 
 # --- ЗАПРОС К МОЗГУ (Groq) ---
@@ -208,5 +211,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
