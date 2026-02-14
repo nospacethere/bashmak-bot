@@ -20,7 +20,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # Модель R1 (как на твоем скрине)
-MODEL_NAME = "google/gemini-2.0-flash-exp:free" 
+MODEL_NAME = "meta-llama/llama-3.1-8b-instruct:free" 
 
 # ПАМЯТЬ
 user_history = {} 
@@ -175,4 +175,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__": asyncio.run(main())
+
 
