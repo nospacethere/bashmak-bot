@@ -41,13 +41,12 @@ async def download_video_rapid(url):
         print("DEBUG: RAPIDAPI_KEY не задан в переменных Koyeb!")
         return None
     
-    # ПРЯМОЙ АДРЕС ИЗ ТВОЕГО ТЕСТА
     api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
     
     headers = {
         "Content-Type": "application/json",
         "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com",
-        "x-rapidapi-key": RAPID_KEY  # Убедись, что в Koyeb именно этот ключ caaa35...
+        "x-rapidapi-key": RAPID_KEY
     }
     
     payload = {"url": url}
@@ -56,25 +55,34 @@ async def download_video_rapid(url):
         try:
             print(f"DEBUG: Отправляю запрос на {api_url} с URL: {url}")
             async with session.post(api_url, json=payload, headers=headers, timeout=20) as response:
-                print(f"DEBUG: Статус ответа: {response.status}")
+                print(f"DEBUG: Статус ответа API: {response.status}")
                 
                 if response.status == 200:
                     data = await response.json()
-                    # Согласно твоему тесту, берем список medias
                     medias = data.get('medias', [])
+                    
                     if medias:
-                        # Перебираем, чтобы найти именно видео (extension: mp4)
+                        # Умный поиск: ищем mp4 без водяных знаков (для YouTube/TikTok)
+                        best_link = None
                         for item in medias:
-                            if item.get('extension') == 'mp4' or item.get('type') == 'video':
-                                video_url = item.get('url')
-                                print("DEBUG: Ссылка на видео получена!")
-                                return video_url
+                            if item.get('extension') == 'mp4':
+                                # Если есть вариант 'hd' или 'no_watermark', берем его
+                                if item.get('quality') in ['hd', 'no_watermark', '1080p', '720p']:
+                                    best_link = item.get('url')
+                                    break
+                                # Если ничего элитного нет, просто запоминаем первый попавшийся mp4
+                                if not best_link:
+                                    best_link = item.get('url')
+                        
+                        final_url = best_link or medias[0].get('url')
+                        print(f"DEBUG: Ссылка получена: {final_url[:50]}...")
+                        return final_url
                 else:
-                    res_text = await response.text()
-                    print(f"DEBUG: Ошибка API ({response.status}): {res_text}")
+                    err = await response.text()
+                    print(f"DEBUG: Ошибка API ({response.status}): {err}")
                     
         except Exception as e:
-            print(f"DEBUG: Критическая ошибка запроса: {e}")
+            print(f"DEBUG: Критическая ошибка загрузки: {e}")
             
     return None
 
@@ -218,6 +226,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
