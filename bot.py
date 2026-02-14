@@ -132,7 +132,7 @@ async def handle_message(message: types.Message):
     history = get_history(cid)
 
     # 1. СКАЧИВАНИЕ ВИДЕО (Instagram, TikTok, YT Shorts)
-    if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts"]):
+    if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts", "youtu.be/"]):
         await bot.send_chat_action(cid, "upload_video")
         video_url = await download_video_rapid(message.text)
         if video_url:
@@ -218,6 +218,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
