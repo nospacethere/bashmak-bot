@@ -38,39 +38,44 @@ ROLES = [
 # --- ФУНКЦИЯ ЗАГРУЗКИ (RapidAPI) ---
 async def download_video_rapid(url):
     if not RAPID_KEY:
-        print("DEBUG: RAPIDAPI_KEY не задан!")
+        print("DEBUG: RAPIDAPI_KEY не задан в переменных Koyeb!")
         return None
     
-    # Список возможных эндпоинтов (иногда префикс /v1/ лишний)
-    endpoints = [
-        "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink",
-        "https://social-download-all-in-one.p.rapidapi.com/social/autolink"
-    ]
+    # ПРЯМОЙ АДРЕС ИЗ ТВОЕГО ТЕСТА
+    api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
     
     headers = {
         "Content-Type": "application/json",
         "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com",
-        "x-rapidapi-key": RAPID_KEY
+        "x-rapidapi-key": RAPID_KEY  # Убедись, что в Koyeb именно этот ключ caaa35...
     }
+    
     payload = {"url": url}
 
     async with aiohttp.ClientSession() as session:
-        for api_url in endpoints:
-            try:
-                print(f"DEBUG: Пробую эндпоинт: {api_url}")
-                async with session.post(api_url, json=payload, headers=headers, timeout=15) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        medias = data.get('medias', [])
-                        if medias:
-                            return medias[0].get('url')
-                    elif response.status == 404:
-                        print(f"DEBUG: 404 на {api_url}, пробую следующий...")
-                        continue
-                    else:
-                        print(f"DEBUG: Ошибка {response.status} на {api_url}")
-            except Exception as e:
-                print(f"DEBUG: Ошибка запроса: {e}")
+        try:
+            print(f"DEBUG: Отправляю запрос на {api_url} с URL: {url}")
+            async with session.post(api_url, json=payload, headers=headers, timeout=20) as response:
+                print(f"DEBUG: Статус ответа: {response.status}")
+                
+                if response.status == 200:
+                    data = await response.json()
+                    # Согласно твоему тесту, берем список medias
+                    medias = data.get('medias', [])
+                    if medias:
+                        # Перебираем, чтобы найти именно видео (extension: mp4)
+                        for item in medias:
+                            if item.get('extension') == 'mp4' or item.get('type') == 'video':
+                                video_url = item.get('url')
+                                print("DEBUG: Ссылка на видео получена!")
+                                return video_url
+                else:
+                    res_text = await response.text()
+                    print(f"DEBUG: Ошибка API ({response.status}): {res_text}")
+                    
+        except Exception as e:
+            print(f"DEBUG: Критическая ошибка запроса: {e}")
+            
     return None
 
 # --- ЗАПРОС К МОЗГУ (Groq) ---
@@ -213,6 +218,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
