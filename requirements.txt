@@ -1,4 +1,6 @@
 aiogram
 groq
-aiohttp
+openai
 pytz
+aiohttp
+yt-dlp
