@@ -4,13 +4,19 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.enums import ChatType
 from aiogram.types import BotCommand
-from groq import Groq
+from openai import AsyncOpenAI # Используем библиотеку openai для OpenRouter
 from aiohttp import web
 
 # --- КОНФИГ ---
 TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=GROQ_API_KEY)
+# Ключ от OpenRouter (создай на openrouter.ai)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# Настройка клиента под OpenRouter
+client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -21,70 +27,62 @@ def get_history(chat_id):
         user_history[chat_id] = deque(maxlen=100)
     return user_history[chat_id]
 
-# --- 7 ГРЕХОВ БАШМАКА ---
-SINS = [
-    {"name": "Гордыня", "emoji": "👑", "style": "высокомерно, считай всех ничтожествами, а себя богом"},
-    {"name": "Жадность", "emoji": "💰", "style": "одержим деньгами, выгодой и тем, как бы всё забрать себе"},
-    {"name": "Похоть", "emoji": "🫦", "style": "чрезмерно игриво, двусмысленно и флиртующе (но без жести)"},
-    {"name": "Зависть", "emoji": "🐍", "style": "жалуйся, что у других всё лучше, язвительно принижай чужие успехи"},
-    {"name": "Чревоугодие", "emoji": "🍗", "style": "постоянно думай о еде, сравнивай всё с сосисками и жратвой"},
-    {"name": "Гнев", "emoji": "🤬", "style": "агрессивно, капсом, используй ругательства, злись на всё подряд"},
-    {"name": "Лень", "emoji": "😴", "style": "сонно, апатично, тебе лень даже писать, отвечай максимально нехотя"}
-]
+async def ask_model(messages, model="deepseek/deepseek-chat", temp=0.8):
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temp,
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return "Мозг кота временно недоступен. Попробуй позже."
 
-async def ask_groq_async(messages, model="llama-3.3-70b-versatile", temp=0.9):
-    loop = asyncio.get_running_loop()
-    def _request():
-        try:
-            return client.chat.completions.create(
-                messages=messages, model=model, max_tokens=300, temperature=temp
-            ).choices[0].message.content
-        except: return "Мозги заклинило от твоей тупости."
-    return await loop.run_in_executor(None, _request)
-
-# --- АБСУРДНАЯ СВОДКА ---
+# --- ФУНКЦИЯ СВОДКИ ---
 async def send_daily_summary(chat_id):
     history = get_history(chat_id)
     clean_history = [m for m in list(history) if not m['content'].startswith('/')]
-    if not clean_history: return "Тут была тишина, я сам себе придумал драку с пылесосом."
+    if not clean_history: 
+        return "Тут было слишком тихо. Никто ничего не сказал, а я не собираюсь выдумывать."
     
     text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean_history])
     prompt = (
-        f"Ты — Башмак, который перепил валерьянки. Сделай нелепый и смешной пересказ чата:\n{text_dump}\n"
-        "ПРАВИЛА: Путай факты, ври, обвиняй людей в том, чего они не делали, смешивай имена. "
-        "Это должно звучать как живой бред кота, а не отчет робота. Максимум 10 предложений."
+        f"Ты — Башмак, язвительный и прямой кот. Составь краткий и смешной итог переписки:\n{text_dump}\n"
+        "ВАЖНО: Пиши только по фактам из текста, не выдумывай то, чего не было. "
+        "Стеби участников, подмечай тупость, но оставайся в контексте. Максимум 5-6 предложений."
     )
     
-    res = await ask_groq_async([{"role": "user", "content": prompt}], temp=1.0)
-    return res
+    return await ask_model([{"role": "user", "content": prompt}])
 
 # --- КОМАНДЫ ---
 @dp.message(Command("roast"))
 async def cmd_roast(message: types.Message):
     history = get_history(message.chat.id)
     clean_history = [m for m in list(history) if not m['content'].startswith('/')]
-    if not clean_history: return await message.reply("Некого жарить, все вымерли.")
+    if not clean_history: return await message.reply("Некого жарить.")
     
     text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean_history[-20:]])
-    prompt = f"Ты циничный кот. Выдай максимально неадекватный и смешной разнос этих людей:\n{text_dump}"
-    res = await ask_groq_async([{"role": "user", "content": prompt}], temp=1.0)
-    await message.answer(f"🔥 **ПРИСТУП ЯРОСТИ:**\n{res}")
+    prompt = f"Ты кот Башмак. Разнеси этих людей на основе их последних сообщений, будь грубым и прямым:\n{text_dump}"
+    res = await ask_model([{"role": "user", "content": prompt}], temp=1.0)
+    await message.answer(f"🔥 **РАЗНОС:**\n{res}")
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: types.Message):
     res = await send_daily_summary(message.chat.id)
-    await message.answer(f"📝 **БРЕДОВЫЕ ИТОГИ:**\n{res}")
+    await message.answer(f"📝 **ИТОГИ ПЕРЕПИСКИ:**\n{res}")
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     await bot.set_my_commands([
-        BotCommand(command="start", description="Пробудить демона"),
+        BotCommand(command="start", description="Оживить"),
         BotCommand(command="roast", description="Прожарка"),
-        BotCommand(command="summary", description="Сводка бреда"),
+        BotCommand(command="summary", description="Итоги"),
     ])
-    await message.answer("😼 Башмак и его 7 грехов в деле. Пул 100 забит. Жду.")
+    await message.answer("😼 Башмак на DeepSeek. Без лишней клоунады и грехов. Только факты и сарказм.")
 
-# --- ТЕКСТОВЫЙ ЧАТ ---
+# --- ЧАТ ---
 @dp.message()
 async def chat(message: types.Message):
     if message.from_user.is_bot or not message.text: return
@@ -99,37 +97,29 @@ async def chat(message: types.Message):
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
     if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply): return
 
-    # ВЫБОР ГРЕХА
-    sin = random.choice(SINS)
-    prompt = (
-        f"Ты — кот Башмак в состоянии греха '{sin['name']}'. Твой стиль: {sin['style']}. "
-        "Отвечай не длинно максимум 3-4 осмысленных предложения. СТРОГИЙ ЗАПРЕТ на скобки типа ))) и действия в скобках. "
-        f"В конце сообщения ОБЯЗАТЕЛЬНО поставь ОДИН символ {sin['emoji']}."
-    )
-
+    prompt = "Ты Башмак, язвительный кот Данила. Отвечай прямо, коротко и с сарказмом. Никаких скобочек и лишней вежливости."
     msgs = [{"role": "system", "content": prompt}]
-    for m in list(history)[-8:]: msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
+    for m in list(history)[-10:]: 
+        msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
     
     await bot.send_chat_action(chat_id=cid, action="typing")
-    reply = await ask_groq_async(msgs)
+    reply = await ask_model(msgs)
     await message.reply(reply)
 
 # --- ПЛАНИРОВЩИК ---
 async def scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
-        # 13:37 - Казино
         if now.hour == 13 and now.minute == 37:
             for cid in list(user_history.keys()):
                 try: await bot.send_dice(cid, emoji='🎰')
                 except: pass
             await asyncio.sleep(61)
-        # 22:00 - Абсурдные итоги
         if now.hour == 22 and now.minute == 0:
             for cid in list(user_history.keys()):
                 try: 
                     res = await send_daily_summary(cid)
-                    await bot.send_message(cid, f"📝 **ЕЖЕДНЕВНЫЙ ГЛЮК (ИТОГИ):**\n{res}")
+                    await bot.send_message(cid, f"📝 **ИТОГИ ДНЯ:**\n{res}")
                 except: pass
             await asyncio.sleep(61)
         await asyncio.sleep(30)
@@ -143,5 +133,3 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__": asyncio.run(main())
-
-
