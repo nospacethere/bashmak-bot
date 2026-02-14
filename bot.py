@@ -21,8 +21,8 @@ COBALT_INSTANCES = [
 "https://cobalt.perennialte.ch/api/json",
     "https://api.cobalt.tools/api/json",
     "https://cobalt.api.ghst.xyz/api/json",
-    "https://co.wuk.sh/api/json",
-    "https://cobalt.nightcity.icu/api/json"
+    "https://cobalt.nightcity.icu/api/json",
+    "https://cobalt.sh/api/json"
 ]
 
 # ПАМЯТЬ
@@ -48,6 +48,7 @@ async def download_via_cobalt(url):
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     }
     payload = {
         "url": url,
@@ -57,16 +58,21 @@ async def download_via_cobalt(url):
     async with aiohttp.ClientSession() as session:
         for api_url in COBALT_INSTANCES:
             try:
-                # Добавил таймаут побольше, вдруг они просто тупят
+                # Ставим таймаут 15 секунд, чтобы не ждать вечно
                 async with session.post(api_url, json=payload, headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # Cobalt может вернуть либо url, либо picker
-                        res_url = data.get('url') or (data.get('picker', [{}])[0].get('url') if data.get('picker') else None)
+                        # Проверяем разные форматы ответа
+                        res_url = data.get('url')
+                        if not res_url and data.get('picker'):
+                            res_url = data['picker'][0].get('url')
+                            
                         if res_url:
                             return res_url
+                    else:
+                        print(f"Сервер {api_url} ответил кодом {response.status}")
             except Exception as e:
-                print(f"Ошибка на {api_url}: {e}")
+                print(f"Ошибка подключения к {api_url}: {e}")
                 continue
     return None
 
@@ -222,5 +228,6 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__": asyncio.run(main())
+
 
 
