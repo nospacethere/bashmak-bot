@@ -48,36 +48,25 @@ async def download_via_cobalt(url):
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     payload = {
         "url": url,
-        "vCodec": "h264",
-        "vQuality": "720",
-        "aFormat": "mp3",
-        "filenamePattern": "classic"
+        "vQuality": "720"
     }
     
     async with aiohttp.ClientSession() as session:
         for api_url in COBALT_INSTANCES:
             try:
-                async with session.post(api_url, json=payload, headers=headers, timeout=10) as response:
+                # Добавил таймаут побольше, вдруг они просто тупят
+                async with session.post(api_url, json=payload, headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
-                        if data.get('status') == 'error':
-                            print(f"Cobalt error on {api_url}: {data.get('text')}")
-                            continue
-                            
-                        # Если API вернул прямую ссылку
-                        if data.get('url'):
-                            return data['url']
-                        # Если API вернул picker (иногда бывает)
-                        if data.get('picker'):
-                            for item in data['picker']:
-                                if item.get('type') == 'video':
-                                    return item['url']
+                        # Cobalt может вернуть либо url, либо picker
+                        res_url = data.get('url') or (data.get('picker', [{}])[0].get('url') if data.get('picker') else None)
+                        if res_url:
+                            return res_url
             except Exception as e:
-                print(f"Failed {api_url}: {e}")
+                print(f"Ошибка на {api_url}: {e}")
                 continue
     return None
 
@@ -233,4 +222,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__": asyncio.run(main())
+
 
