@@ -2,3 +2,5 @@ aiogram
 groq
 aiohttp
 pytz
+motor
+dnspython
