@@ -32,7 +32,7 @@ def get_history(chat_id):
         user_history[chat_id] = deque(maxlen=100)
     return user_history[chat_id]
 
-# --- ТВОИ РОЛИ ---
+# --- РОЛИ ---
 ROLES = [
     {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, краткость, база."},
     {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о тщетности бытия."},
@@ -47,11 +47,7 @@ ROLES = [
 async def download_video_rapid(url):
     if not RAPID_KEY: return None
     api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
-    headers = {
-        "Content-Type": "application/json",
-        "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com",
-        "x-rapidapi-key": RAPID_KEY
-    }
+    headers = {"Content-Type": "application/json", "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com", "x-rapidapi-key": RAPID_KEY}
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(api_url, json={"url": url}, headers=headers, timeout=20) as resp:
@@ -83,6 +79,7 @@ async def get_leaderboard_text():
 
 # --- ОБРАБОТЧИКИ ---
 
+# 1. КАЗИНО (Без лишней болтовни)
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰')
 async def handle_dice(message: types.Message):
     user_id = message.from_user.id
@@ -100,18 +97,15 @@ async def handle_dice(message: types.Message):
     v = message.dice.value - 1
     reels = [v % 4, (v // 4) % 4, v // 16]
     
-    if message.dice.value == 64: change, res_text = 50, "ДЖЕКПОТ (777)"
-    elif reels[0] == reels[1] == reels[2]: change, res_text = 15, "ТРИ В РЯД"
-    elif reels[0] == reels[1] or reels[1] == reels[2]: change, res_text = 1, "ДВЕ В РЯД"
-    else: change, res_text = -1, "ПРОИГРЫШ"
+    if message.dice.value == 64: change = 50
+    elif reels[0] == reels[1] == reels[2]: change = 15
+    elif reels[0] == reels[1] or reels[1] == reels[2]: change = 1
+    else: change = -1
 
     new_balance = current_balance + change
     await scores_col.update_one({"user_id": user_id}, {"$set": {"balance": new_balance, "name": name}})
     
-    prompt = f"Ты кот Башмак. {name} выбил {res_text}. Его баланс: {new_balance}. Напиши язвительный комментарий."
-    reaction = await ask_model([{"role": "user", "content": prompt}])
-    await asyncio.sleep(4)
-    await message.reply(reaction)
+    # Реакцию убрали по просьбе Данила, чтобы не спамить
 
     if is_new:
         await message.answer("📜 **ПРАВИЛА:**\nСтарт: 10 очков.\n777: +50\n3 в ряд: +15\n2 в ряд: +1\nМимо: -1\nТоп: /top")
@@ -121,6 +115,7 @@ async def cmd_top(message: types.Message):
     text = await get_leaderboard_text()
     await message.answer(text)
 
+# 2. ТУПОЕ САМАРИ (5 предложений)
 async def send_confused_summary(chat_id):
     history = get_history(chat_id)
     clean = [m for m in list(history) if not m['content'].startswith('/')]
@@ -131,20 +126,29 @@ async def send_confused_summary(chat_id):
         return
 
     text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean])
-    prompt = (f"Ты Башмак. Сделай язвительный итог дня. Переписка:\n{text_dump}\n\nТаблица лидеров:\n{top_text}")
-    res = await ask_model([{"role": "user", "content": prompt}], temp=1.2)
-    await bot.send_message(chat_id, f"🌀 **ИТОГИ ДНЯ:**\n{res}")
+    # Промпт для тупой личности
+    prompt = (
+        "Ты — Башмак-тормоз. Ты очень тупой кот, путаешь буквы, пишешь с ошибками. "
+        "Сделай очень глупый итог дня по переписке."
+        "ВАЖНО: Напиши 3-5 предложений, не больше и не меньше. "
+        f"Переписка:\n{text_dump}\n\nТаблица лидеров казино:\n{top_text}"
+    )
+    
+    res = await ask_model([{"role": "user", "content": prompt}], temp=1.1)
+    await bot.send_message(chat_id, f"🌀 **ИТОГИ СМЕРТЕЛЬНОГО ГЕМБЛИНГ ДНЯ:**\n{res} 🥴")
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: types.Message):
     await send_confused_summary(message.chat.id)
 
+# 3. ВИДЕО И ЧАТ
 @dp.message()
 async def handle_message(message: types.Message):
     if message.from_user.is_bot or not message.text: return
     cid = message.chat.id
     history = get_history(cid)
 
+    # Скачивание видео
     if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts", "youtu.be/"]):
         await bot.send_chat_action(cid, "upload_video")
         v_url = await download_video_rapid(message.text)
@@ -152,9 +156,10 @@ async def handle_message(message: types.Message):
             async with aiohttp.ClientSession() as s:
                 async with s.get(v_url) as r:
                     if r.status == 200:
-                        await message.reply_video(BufferedInputFile(await r.read(), filename="video.mp4"), caption="😼 Стырил")
+                        await message.reply_video(BufferedInputFile(await r.read(), filename="v.mp4"), caption="😼 Стырил")
                         return
 
+    # Сохранение истории
     if not message.text.startswith('/'):
         history.append({"role": "user", "name": message.from_user.first_name, "content": message.text})
         try: await scores_col.update_one({"user_id": message.from_user.id}, {"$set": {"name": message.from_user.first_name}}, upsert=False)
@@ -163,6 +168,7 @@ async def handle_message(message: types.Message):
     bot_obj = await bot.get_me()
     is_named = "башмак" in message.text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_obj.id
+    
     if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.15): return
 
     selected_role = random.choice(ROLES)
