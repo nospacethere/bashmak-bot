@@ -34,13 +34,12 @@ def get_history(chat_id):
 
 # --- РОЛИ ---
 ROLES = [
-    {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, краткость, база."},
-    {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о тщетности бытия."},
+    {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, база, огромный патриот России."},
+    {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о увпиденном тобой сообщении."},
     {"name": "Добряк", "emoji": "✨", "prompt": "Ты — подозрительно добрый Башмак. Люби всех, это пугает."},
     {"name": "Тупой", "emoji": "🥴", "prompt": "Ты — Башмак-тормоз. Путай буквы, пиши тупо."},
-    {"name": "Инфоцыган", "emoji": "💎", "prompt": "Ты — Успешный Башмак. Продавай курсы по успешному успеху."},
-    {"name": "Параноик", "emoji": "🕵️", "prompt": "Ты — Башмак-параноик. Ищи слежку везде."},
-    {"name": "Анимешник", "emoji": "🏮", "prompt": "Ты — Башмак-отаку. Сравнивай всё с аниме."}
+    {"name": "Инфоцыган", "emoji": "💎", "prompt": "Ты — Успешный Башмак. Продавай курсы по любому слову которое увидел."},
+    {"name": "Анимешник", "emoji": "🏮", "prompt": "Ты — Башмак-отаку. Сравнивай всё с аниме, вкидывай пару японских слов и рядом перевод и как читается."}
 ]
 
 # --- ПОМОЩНИКИ ---
@@ -129,7 +128,7 @@ async def send_confused_summary(chat_id):
     # Промпт для тупой личности
     prompt = (
         "Ты — Башмак-тормоз. Ты очень тупой кот, путаешь буквы, пишешь с ошибками. "
-        "Сделай очень глупый итог дня по переписке."
+        "Сделай глупый итог дня по переписке."
         "ВАЖНО: Напиши 3-5 предложений, не больше и не меньше. "
         f"Переписка:\n{text_dump}\n\nТаблица лидеров казино:\n{top_text}"
     )
@@ -169,9 +168,20 @@ async def handle_message(message: types.Message):
     is_named = "башмак" in message.text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_obj.id
     
-    if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.15): return
+    if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.05): return
 
-    selected_role = random.choice(ROLES)
+    selected_role = None
+    if is_reply:
+        original_message_text = message.reply_to_message.text
+        if original_message_text:
+            for role in ROLES:
+                if role["emoji"] in original_message_text:
+                    selected_role = role
+                    break
+    
+    if not selected_role:
+        selected_role = random.choice(ROLES)
+
     msgs = [{"role": "system", "content": f"{selected_role['prompt']} Отвечай кратко. В конце: {selected_role['emoji']}"}]
     for m in list(history)[-12:]: msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
 
