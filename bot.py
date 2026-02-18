@@ -175,6 +175,7 @@ async def cmd_get_item(message: types.Message):
 @dp.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
+    user_name = message.from_user.first_name
 
     if command.args is None:
         await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
@@ -186,44 +187,54 @@ async def cmd_use(message: types.Message, command: CommandObject):
         await message.reply(f"Неверный предмет. Доступные: { ', '.join(ITEMS.keys()) }")
         return
 
-    inventory_doc = await inventories_col.find_one({"user_id": user_id, "items": item_key})
-    if not inventory_doc:
+    inventory_doc = await inventories_col.find_one({"user_id": user_id})
+    if not inventory_doc or item_key not in inventory_doc.get("items", []):
         await message.reply("У вас нет такого предмета. 😕")
         return
 
+    # --- REMOVE ONE ITEM FROM INVENTORY ---
+    # This is a bit tricky in MongoDB, so we do it manually.
+    # We fetch, remove one instance, and then update.
+    current_items = inventory_doc.get("items", [])
+    current_items.remove(item_key)
+    await inventories_col.update_one({"user_id": user_id}, {"$set": {"items": current_items}})
+
     item = ITEMS[item_key]
 
+    # --- HANDLE TARGETED ITEMS ---
     if item["requires_target"]:
         if not message.reply_to_message:
             await message.reply(f"Чтобы использовать **{item['name']}**, ответьте на сообщение цели.")
+            # Return the item if the action failed
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         target_user = message.reply_to_message.from_user
         if target_user.id == user_id:
             await message.reply("Нельзя использовать это на себя! 🎰")
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         
         bot_user = await bot.get_me()
         if target_user.is_bot and target_user.id != bot_user.id:
             await message.reply("Боты невосприимчивы к магии предметов (кроме меня, конечно). 🤖")
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
 
         target_id = target_user.id
         target_name = target_user.first_name
         
-        await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}})
-        await scores_col.update_one({"user_id": target_id},{"$addToSet": {"active_effects": item_key}},upsert=True)
+        await scores_col.update_one({"user_id": target_id}, {"$addToSet": {"active_effects": item_key}}, upsert=True)
         await scores_col.update_one({"user_id": target_id}, {"$setOnInsert": {"name": target_name, "balance": 100}}, upsert=True)
 
-        await message.answer(f"{message.from_user.first_name} использовал **{item['name']}** на игрока {target_name}! 😈")
+        await message.answer(f"{user_name} использовал **{item['name']}** на игрока {target_name}! 😈")
         return
 
-    # --- PREDMETY BEZ CELI ---
-    await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}}) # General pull for non-target items
-
+    # --- HANDLE NON-TARGETED ITEMS ---
     if item_key == "money_pouch":
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}})
+        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
-        await message.reply(f"💰 Вы использовали **Мешочек мелочи** и получили +10 фишек! Ваш баланс: {user_doc['balance']}")
+        new_balance = user_doc.get("balance", 10)
+        await message.reply(f"💰 Вы использовали **Мешочек мелочи** и получили +10 фишек! Ваш баланс: {new_balance}")
 
     elif item_key == "golden_boot":
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "golden_boot_active"}}, upsert=True)
@@ -233,6 +244,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
         bot_user = await bot.get_me()
         all_players_cursor = scores_col.find({"user_id": {"$nin": [user_id, bot_user.id]}}, {"user_id": 1, "name": 1})
         all_players = await all_players_cursor.to_list(length=None)
+        
         if not all_players:
             await message.reply("В казино больше нет игроков, чтобы стать жертвой хаоса. 🎲")
             # Return the item if no victims
@@ -244,8 +256,8 @@ async def cmd_use(message: types.Message, command: CommandObject):
         victim_name = victim['name']
         roll = random.randint(1, 6)
         
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": roll}})
-        await scores_col.update_one({"user_id": victim_id}, {"$inc": {"balance": -roll}})
+        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": roll}}, upsert=True)
+        await scores_col.update_one({"user_id": victim_id}, {"$inc": {"balance": -roll}}, upsert=True)
 
         user_doc = await scores_col.find_one({"user_id": user_id})
         victim_doc = await scores_col.find_one({"user_id": victim_id})
@@ -289,13 +301,52 @@ async def handle_dice(message: types.Message):
         current_balance -= entry_cost
 
     if is_new_user and current_spin_number == 1:
-        await message.answer(
-            "🎰 **Добро пожаловать в Казино!** 🎰\n\n"
-            "Делайте ставки, срывайте джекпот и соревнуйтесь! У вас 5 попыток в день.\n\n"
-            "- **Спины 1-2:** Бесплатно\n- **Спин 3:** -5 фишек\n- **Спин 4:** -12 фишек\n- **Спин 5 (Тёмное Казино):** -20 фишек, высокий риск!\n\n"
-            "Используйте `/get_item`, чтобы купить предметы. Проверяйте `/inventory`.\n\n"
-            "Ваш стартовый капитал: 100 фишек. Желаю удачи! 😼"
-        )
+        item_descriptions = "\n".join([f"- **{item['name']}**: _{item['description']}_" for item in ITEMS.values()])
+        
+        welcome_text = f'''😼 **Добро пожаловать в подпольное казино «Гемблинг Башмак»!**
+
+Здесь удача улыбается смелым, а риск — второе имя. Твоя цель — сорвать куш, подняться в таблице лидеров `/top` и стать легендой этого заведения.
+
+Ты начинаешь со **100 фишками**. Вот правила:
+
+---
+
+**🎲 ПРАВИЛА СПИНОВ**
+
+У тебя есть **5 попыток в день**. Каждая ставка может изменить всё.
+
+- **Спины 1-2:** Бесплатно. Разогрев для новичков.
+- **Спин 3:** -5 фишек. Игра начинается.
+- **Спин 4:** -12 фишек. Ставки растут.
+- **Спин 5:** **ТЁМНОЕ КАЗИНО** (-20 фишек). Здесь обычные правила не действуют. Высокий риск, но и награда может быть невероятной: от крупной суммы фишек до редких предметов... или полного провала.
+
+---
+
+**🏆 ТАБЛИЦА ВЫИГРЫШЕЙ**
+
+- **7️⃣-7️⃣-7️⃣ (Джекпот):** +80 фишек
+- **BAR-BAR-BAR:** +40 фишек
+- **Три одинаковых символа:** +15 фишек
+- **Два одинаковых символа:** +3 фишки
+- **Проигрыш:** -2 фишки
+
+---
+
+**🎁 ЛАВКА КОНТРАБАНДЫ**
+
+За фишки можно купить особые предметы через команду `/get_item`. Они могут перевернуть игру.
+{item_descriptions}
+
+---
+
+Команды для игры:
+- `/top` — посмотреть зал славы.
+- `/inventory` — проверить свои предметы.
+- `/get_item` — купить случайный предмет за 10 фишек.
+
+**Да начнутся игры! Делай свою первую ставку. 🎰**
+'''
+        await message.answer(welcome_text)
 
     await spin_counts_col.update_one({'user_id': user_id},{'$inc': {'count': 1}},upsert=True)
 
