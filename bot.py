@@ -29,6 +29,7 @@ mongo_client = AsyncIOMotorClient(MONGO_URL, tlsAllowInvalidCertificates=True)
 db = mongo_client['bashmak_db']
 scores_col = db['scores']
 inventories_col = db['inventories']
+spin_counts_col = db['spin_counts']
 
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
@@ -50,54 +51,17 @@ def get_history(chat_id):
 GAMBLING_SHOE_PROMPT = "Ты — Гемблинг Башмак, азартный и рисковый кот. Весь мир для тебя — казино. Говори об удаче, ставках, риске и джекпотах. Используй сленг казино (фишки, олл-ин, джекпот, ставка, спин) и всегда будь готов поставить всё на кон. Ты немного циничен и саркастичен."
 ROLES = [{"name": "Гемблинг Башмак", "emoji": "🎰", "prompt": GAMBLING_SHOE_PROMPT}]
 
-# --- ОБРАБОТЧИК БРОСКОВ КАЗИНО ---
-async def process_dice_roll(user_id, name, dice_value):
-    user_doc = await scores_col.find_one({"user_id": user_id})
-    is_new = False
-    
-    if not user_doc:
-        is_new = True
-        start_balance = 100
-        await scores_col.insert_one({"user_id": user_id, "name": name, "balance": start_balance, "active_effects": []})
-        current_balance = start_balance
-        active_effects = []
-    else:
-        current_balance = user_doc.get('balance', 0)
-        active_effects = user_doc.get('active_effects', [])
-
+# --- PURE CALCULATION ---
+def calculate_win(dice_value):
     v = dice_value - 1
     reels = [v % 4, (v // 4) % 4, v // 16]
     is_bar = lambda r: r == 1
     
-    if dice_value == 64: change = 80
-    elif all(is_bar(r) for r in reels): change = 40
-    elif reels[0] == reels[1] == reels[2]: change = 15
-    elif reels[0] == reels[1] or reels[1] == reels[2]: change = 3
-    else: change = -2
-
-    final_change = change
-    effects_to_remove = []
-    effect_applied = False
-    if "black_mark" in active_effects:
-        final_change *= 2
-        effects_to_remove.append("black_mark")
-        effect_applied = True
-    if "madness_coin" in active_effects:
-        if random.random() < 0.5: 
-            final_change *= 2
-        else: 
-            final_change *= -2
-        effects_to_remove.append("madness_coin")
-        effect_applied = True
-
-    new_balance = current_balance + final_change
-    
-    update_query = {"$set": {"balance": new_balance, "name": name}}
-    if effects_to_remove:
-        update_query["$pull"] = {"active_effects": {"$in": effects_to_remove}}
-    await scores_col.update_one({"user_id": user_id}, update_query)
-    
-    return is_new, change, final_change, new_balance, effect_applied
+    if dice_value == 64: return 80
+    elif all(is_bar(r) for r in reels): return 40
+    elif reels[0] == reels[1] == reels[2]: return 15
+    elif reels[0] == reels[1] or reels[1] == reels[2]: return 3
+    else: return -2
 
 # --- ПОМОЩНИКИ ---
 async def download_video_rapid(url):
@@ -131,7 +95,9 @@ async def get_leaderboard_text():
     text = "🏆 **ЗАЛ СЛАВЫ КАЗИНО:**\n"
     for i, p in enumerate(players):
         medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
-        text += f"{p['name']}: {p['balance']} фишек\n"
+        name = p.get('name', 'Anon')
+        balance = p.get('balance', 0)
+        text += f"{medal} {name}: {balance} фишек\n"
     return text
 
 # --- ОБРАБОТЧИКИ ---
@@ -142,9 +108,10 @@ async def cmd_admin_wipe(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     await scores_col.drop()
     await inventories_col.drop()
-    await message.answer("💥 **КАЗИНО СОЖЖЕНО ДОТЛА!** 💥\nВсе ставки и инвентари обнулены.")
+    await spin_counts_col.drop()
+    await message.answer("💥 **КАЗИНО СОЖЖЕНО ДОТЛА!** 💥\nВсе ставки, инвентари и счетчики спинов обнулены.")
     bot_user = await bot.get_me()
-    await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
+    await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100, "daily_start_balance": 100}}, upsert=True)
     await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
 
 @dp.message(Command("admin_give_item"))
@@ -158,37 +125,27 @@ async def cmd_admin_give_item(message: types.Message, command: CommandObject):
     await inventories_col.update_one({"user_id": message.from_user.id}, {"$push": {"items": item_key}}, upsert=True)
     await message.answer(f"Вы получили: **{ITEMS[item_key]['name']}**")
 
-@dp.message(Command("admin_give_random_item"))
-async def cmd_admin_give_random_item(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    item_key = random.choice(list(ITEMS.keys()))
-    await inventories_col.update_one({"user_id": message.from_user.id}, {"$push": {"items": item_key}}, upsert=True)
-    await message.answer(f"Вы получили случайный предмет: **{ITEMS[item_key]['name']}**")
-
-@dp.message(Command("bashmak_roll"))
-async def cmd_bashmak_roll(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    sent_message = await bot.send_dice(message.chat.id, emoji='🎰')
-    bot_user = await bot.get_me()
-    _, _, final_change, new_balance, _ = await process_dice_roll(bot_user.id, "Гемблинг Башмак", sent_message.dice.value)
-    if final_change >= 15: await message.answer(f"Крупная игра! +{final_change} фишек. Мой баланс: {new_balance}. 🎰")
-    elif final_change > 0: await message.answer(f"Ставка сыграла! +{final_change} фишек. Мой баланс: {new_balance}. 🎰")
-    else: await message.answer(f"Проигрыш... {final_change} фишек. Мой баланс: {new_balance}. 🎰")
-
 # 2. ИНВЕНТАРЬ И ПРЕДМЕТЫ
 @dp.message(Command("inventory"))
 async def cmd_inventory(message: types.Message):
     user_id = message.from_user.id
     inventory_doc = await inventories_col.find_one({"user_id": user_id})
     if not inventory_doc or not inventory_doc.get("items"):
-        await message.answer("Ваш инвентарь пуст. Делайте ставки, господа! 🎰")
+        await message.answer("🎒 **Ваш инвентарь пуст.**\n\n_Делайте ставки или используйте /get_item, чтобы получить свой первый предмет!_ 🎰")
         return
-    text = "🎒 **ВАШ ИНВЕНТАРЬ:**\n_Нажмите на предмет, чтобы подготовить его к использованию._\n"
+
+    text = "🎒 **ВАШ ИНВЕНТАРЬ**\n\n"
     item_counts = {item_key: inventory_doc["items"].count(item_key) for item_key in set(inventory_doc["items"])}
-    buttons = []
+    
     for item_key, count in sorted(item_counts.items()):
         item = ITEMS[item_key]
-        buttons.append([InlineKeyboardButton(text=f"{item['name']} (x{count})", switch_inline_query_current_chat=f"/use {item_key} ")])
+        text += f"**{item['name']}** (x{count})\n_{item['description']}_\n\n"
+
+    buttons = []
+    for item_key in sorted(item_counts.keys()):
+        item = ITEMS[item_key]
+        buttons.append([InlineKeyboardButton(text=f"Использовать {item['name']}", switch_inline_query_current_chat=f"/use {item_key} ")])
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(text, reply_markup=keyboard)
 
@@ -196,10 +153,8 @@ async def cmd_inventory(message: types.Message):
 async def cmd_get_item(message: types.Message):
     user_id = message.from_user.id
     cost = 10
-
     user_doc = await scores_col.find_one({"user_id": user_id})
 
-    # Ensure the user is in the database
     if not user_doc:
         await message.reply("Вы еще не играли в казино! Сделайте ставку, чтобы начать. 🎰")
         return
@@ -209,41 +164,33 @@ async def cmd_get_item(message: types.Message):
         return
 
     await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -cost}})
-
     item_key = random.choice(list(ITEMS.keys()))
     await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}}, upsert=True)
     
-    # Get updated balance to show the user
     updated_user_doc = await scores_col.find_one({"user_id": user_id})
     new_balance = updated_user_doc['balance']
-
-    await message.answer(
-        f"Вы потратили {cost} фишек и получили случайный предмет: **{ITEMS[item_key]['name']}**!\n"
-        f"Ваш новый баланс: {new_balance} фишек. 🎰"
-    )
+    await message.answer(f"Вы потратили {cost} фишек и получили: **{ITEMS[item_key]['name']}**!\nВаш новый баланс: {new_balance} фишек. 🎰")
 
 def is_use_command(message: types.Message) -> bool:
-    if not message.text:
-        return False
     text = message.text
-    if text.startswith('/use'):
-        return True
-    if text.startswith('@'):
+    if not text: return False
+    if text.startswith('/use'): return True
+    bot_username = bot.get("username")
+    if text.startswith(f'@{bot_username}'):
         parts = text.split(maxsplit=1)
-        if len(parts) > 1 and parts[1].startswith('/use'):
-            return True
+        if len(parts) > 1 and parts[1].startswith('/use'): return True
     return False
 
 @dp.message(is_use_command)
 async def cmd_use(message: types.Message):
+    user_id = message.from_user.id
     text = message.text
-    if text.startswith('@'):
+    bot_username = bot.get("username")
+    if text.startswith(f'@{bot_username}'):
         text = text.split(maxsplit=1)[1]
     
     parts = text.split(maxsplit=1)
     args = parts[1] if len(parts) > 1 else None
-    
-    user_id = message.from_user.id
     item_key = args.strip().lower() if args else None
 
     if not item_key or item_key not in ITEMS:
@@ -257,7 +204,6 @@ async def cmd_use(message: types.Message):
 
     item = ITEMS[item_key]
 
-    # --- ПРЕДМЕТЫ С ЦЕЛЬЮ ---
     if item["requires_target"]:
         if not message.reply_to_message:
             await message.reply(f"Чтобы использовать **{item['name']}**, ответьте на сообщение цели.")
@@ -282,7 +228,6 @@ async def cmd_use(message: types.Message):
         await message.answer(f"{message.from_user.first_name} использовал **{item['name']}** на игрока {target_name}! 😈")
         return
 
-    # --- ПРЕДМЕТЫ БЕЗ ЦЕЛИ ---
     if item_key == "money_pouch":
         await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}})
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}})
@@ -321,50 +266,121 @@ async def cmd_use(message: types.Message):
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
 async def handle_dice(message: types.Message):
-    is_new, change, final_change, new_balance, effect_applied = await process_dice_roll(message.from_user.id, message.from_user.first_name, message.dice.value)
-    
-    if is_new:
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
+
+    user_doc = await scores_col.find_one({'user_id': user_id})
+    is_new_user = False
+    if not user_doc:
+        is_new_user = True
+        start_balance = 100
+        await scores_col.insert_one({
+            "user_id": user_id, "name": user_name, "balance": start_balance,
+            "daily_start_balance": start_balance, "active_effects": []
+        })
+        user_doc = await scores_col.find_one({'user_id': user_id})
+
+    spin_count_doc = await spin_counts_col.find_one({'user_id': user_id})
+    spin_count = spin_count_doc.get('count', 0) if spin_count_doc else 0
+    current_spin_number = spin_count + 1
+
+    if current_spin_number > 5:
+        await message.reply("На сегодня твои попытки в казино закончились! Возвращайся завтра. 🎰")
+        return
+
+    costs = {3: 5, 4: 12, 5: 20}
+    entry_cost = costs.get(current_spin_number, 0)
+    current_balance = user_doc.get('balance', 0)
+
+    if current_balance < entry_cost:
+        await message.reply(f"Недостаточно фишек для {current_spin_number}-го спина! Нужно {entry_cost}, а у тебя {current_balance}. 😕")
+        return
+        
+    if entry_cost > 0:
+        await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': -entry_cost}})
+        current_balance -= entry_cost
+
+    if is_new_user and current_spin_number == 1:
         await message.answer(
-            f"Добро пожаловать в 'Смертельную Гемблинг Миграцию'!\n\n"
-            f"📜 **ПРАВИЛА КАЗИНО:**\n"
-            f"Тебе дается **100** стартовых фишек.\n\n"
-            f"**ТАБЛИЦА ВЫПЛАТ:**\n"
-            f"🍋🍇🍒 - Разные символы: **-2** фишки\n"
-            f"??🤔 - Два подряд: **+3** фишки\n"
-            f"🍇🍇🍇 - Три фрукта/ягоды: **+15** фишек\n"
-            f"BAR BAR BAR - Три BAR'а: **+40** фишек\n"
-            f"7️⃣7️⃣7️⃣ - Джекпот: **+80** фишек\n\n"
-            f"Смотри таблицу лидеров: /top, инвентарь: /inventory\n"
-            f"Да начнется игра! 🎰"
+            "🎰 **Добро пожаловать в Казино!** 🎰\n\n"
+            "Делайте ставки, срывайте джекпот и соревнуйтесь! У вас 5 попыток в день.\n\n"
+            "- **Спины 1-2:** Бесплатно\n- **Спин 3:** -5 фишек\n- **Спин 4:** -12 фишек\n- **Спин 5 (Тёмное Казино):** -20 фишек, высокий риск!\n\n"
+            "Используйте `/get_item`, чтобы купить предметы. Проверяйте `/inventory`.\n\n"
+            "Ваш стартовый капитал: 100 фишек. Желаю удачи! 😼"
         )
-    else:
-        if effect_applied:
-            if final_change > change: 
-                effect_msg = f"🌓 На вас сработал эффект и **удвоил выигрыш**!"
-            elif final_change < 0 and change > 0:
-                effect_msg = f"🌓 На вас сработал эффект и **превратил выигрыш в проигрыш**!"
-            elif final_change < change:
-                effect_msg = f"💀 На вас сработал эффект и **удвоил проигрыш**!"
-            else:
-                effect_msg = "На вас сработал эффект!"
-            await message.reply(f"{effect_msg}\nВаш результат: {change} -> **{final_change}**!\nТеперь у тебя {new_balance} фишек. 🎰")
+
+    await spin_counts_col.update_one({'user_id': user_id},{'$inc': {'count': 1}},upsert=True)
+
+    if current_spin_number == 5:
+        await message.answer(f"За вход в **ТЁМНОЕ КАЗИНО** списано {entry_cost} фишек... 😈")
+        await asyncio.sleep(1)
+
+        if random.random() < 0.5:
+            daily_start_balance = user_doc.get('daily_start_balance', user_doc['balance'])
+            await scores_col.update_one({'user_id': user_id}, {'$set': {'balance': daily_start_balance}})
+            
+            inventory_doc = await inventories_col.find_one({'user_id': user_id})
+            burned_item_msg = ""
+            if inventory_doc and inventory_doc.get('items'):
+                items = inventory_doc.get('items')
+                item_to_burn = random.choice(items)
+                await inventories_col.update_one({'user_id': user_id}, {'$pull': {'items': item_to_burn}})
+                burned_item_msg = f"К тому же, у тебя сгорел предмет: **{ITEMS[item_to_burn]['name']}**!"
+            
+            await message.reply(f"💥 **КРАХ!** 💥\nТьма поглотила твой дневной выигрыш! Баланс сброшен до **{daily_start_balance}** фишек.\n{burned_item_msg}")
         else:
-            if change >= 15: await message.reply(f"А вот и удача! +{change} фишек. Теперь у тебя {new_balance} фишек. 🎰")
-            elif change > 0: await message.reply(f"Держи +{change}. Теперь у тебя {new_balance} фишек. 🎰")
-            else: await message.reply(f"Мимо. {change} фишки. Теперь у тебя {new_balance} фишек. 🎰")
+            if random.random() < 0.5:
+                await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': 50}})
+                new_balance = current_balance + 50
+                await message.reply(f"🎉 **УСПЕХ!** 🎉\nТы обыграл тьму и получаешь **+50 фишек**! Твой баланс: {new_balance}. ✨")
+            else:
+                item_key = random.choice(list(ITEMS.keys()))
+                await inventories_col.update_one({'user_id': user_id}, {'$push': {'items': item_key}}, upsert=True)
+                await message.reply(f"🎉 **УСПЕХ!** 🎉\nТьма дарует тебе артефакт! Ты получил: **{ITEMS[item_key]['name']}**. 🎁")
+        return
+
+    cost_msg = f"(Спин {current_spin_number}/5) "
+    if entry_cost > 0: cost_msg += f"(-{entry_cost} фишек) "
+
+    change = calculate_win(message.dice.value)
+    final_change = change
+    
+    active_effects = user_doc.get('active_effects', [])
+    effects_to_remove = []
+    if "black_mark" in active_effects:
+        final_change *= 2
+        effects_to_remove.append("black_mark")
+    if "madness_coin" in active_effects:
+        if random.random() < 0.5: final_change *= 2
+        else: final_change *= -2
+        effects_to_remove.append("madness_coin")
+        
+    update_query = {"$inc": {"balance": final_change}}
+    if effects_to_remove:
+        update_query["$pull"] = {"active_effects": {"$in": effects_to_remove}}
+    await scores_col.update_one({'user_id': user_id}, update_query)
+    
+    new_balance = current_balance + final_change
+
+    if effects_to_remove:
+        await message.reply(f"{cost_msg}На вас сработал эффект! {change} -> **{final_change}**! Баланс: {new_balance} 🎰")
+    else:
+        if change >= 15: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
+        elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
+        else: await message.reply(f"{cost_msg}Мимо. {change}. Баланс: {new_balance} 🎰")
 
 @dp.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
 async def handle_football(message: types.Message):
     user_id = message.from_user.id
     dice_value = message.dice.value
-    if dice_value >= 4: # Гол
+    if dice_value >= 4:
         change = 50
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}})
+        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
         await message.reply(f"ГОООЛ! Вы забили и получаете +{change} фишек! Ваш баланс: {user_doc['balance']} ⚽️")
-    else: # Мимо
+    else:
         change = -25
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}})
+        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
         await message.reply(f"Штанга! Вы промахнулись и теряете {abs(change)} фишек... Ваш баланс: {user_doc['balance']} ⚽️")
 
@@ -373,7 +389,11 @@ async def cmd_top(message: types.Message):
     text = await get_leaderboard_text()
     await message.answer(text)
 
-# 4. ИТОГИ ДНЯ В СТИЛЕ КАЗИНО
+@dp.message(Command("summary"))
+async def cmd_summary(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await send_gambling_summary(message.chat.id)
+
 async def send_gambling_summary(chat_id):
     history = get_history(chat_id)
     if not history: 
@@ -399,19 +419,13 @@ async def send_gambling_summary(chat_id):
     res = await ask_model([{"role": "user", "content": prompt}], temp=1.0)
     await bot.send_message(chat_id, f"💰 **ИТОГИ ИГРОВОГО ДНЯ:**\n{res} 🎰")
 
-@dp.message(Command("summary"))
-async def cmd_summary(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
-    await send_gambling_summary(message.chat.id)
-
-# 5. ВИДЕО И ЧАТ
 @dp.message()
 async def handle_message(message: types.Message):
-    if message.from_user.is_bot or not message.text or message.text.startswith('/'): return
+    if message.from_user.is_bot or not message.text or message.text.startswith('/') or (message.dice and message.dice.emoji in ['🎰', '⚽']):
+        return
     cid = message.chat.id
     history = get_history(cid)
     
-    # Скачивание видео
     if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts", "youtu.be/"]):
         await bot.send_chat_action(cid, "upload_video")
         v_url = await download_video_rapid(message.text)
@@ -422,14 +436,13 @@ async def handle_message(message: types.Message):
                         await message.reply_video(BufferedInputFile(await r.read(), filename="v.mp4"), caption="😼 Стырил")
                         return
 
-    # Сохранение истории и ответы Башмака
     history.append({"role": "user", "name": message.from_user.first_name, "content": message.text})
     try: 
         await scores_col.update_one({"user_id": message.from_user.id}, {"$set": {"name": message.from_user.first_name}}, upsert=False)
     except: pass
 
     bot_obj = await bot.get_me()
-    is_named = "башмак" in message.text.lower()
+    is_named = bot_obj.username.lower() in message.text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_obj.id
     
     if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.05): return
@@ -448,27 +461,41 @@ async def handle_message(message: types.Message):
     await message.reply(reply)
 
 # --- ПЛАНИРОВЩИК ---
+async def reset_daily_state():
+    await scores_col.update_many({}, [{"$set": {"daily_start_balance": "$balance"}}])
+    await spin_counts_col.delete_many({})
+    print(f"[{datetime.datetime.now()}] Daily game state has been reset.")
+
 async def scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+        if now.hour == 0 and now.minute == 0:
+            await reset_daily_state()
+            for cid in user_history:
+                user_history[cid].clear()
+            await asyncio.sleep(61)
+
         if now.hour == 22 and now.minute == 0:
-            all_chat_ids = [doc['_id'] async for doc in user_history_db.find({}, {'_id': 1})]
+            all_chat_ids = list(user_history.keys())
             for cid in all_chat_ids:
                 await send_gambling_summary(cid)
-                if cid in user_history: user_history[cid].clear()
             await asyncio.sleep(61)
+
         await asyncio.sleep(30)
 
 async def main():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bashmak is alive"))
     runner = web.AppRunner(app); await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000))).start()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
+    await site.start()
     
     asyncio.create_task(scheduler())
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Установка команд
+    me = await bot.get_me()
+    bot.username = me.username
+
     main_commands = [
         BotCommand(command="inventory", description="🎒 Открыть инвентарь"),
         BotCommand(command="top", description="🏆 Посмотреть таблицу лидеров"),
