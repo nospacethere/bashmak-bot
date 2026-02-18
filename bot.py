@@ -33,14 +33,19 @@ def get_history(chat_id):
     return user_history[chat_id]
 
 # --- РОЛИ ---
+# Основная личность
+GAMBLING_SHOE_PROMPT = "Ты — Гемблинг Башмак, азартный и рисковый кот. Весь мир для тебя — казино. Говори об удаче, ставках, риске и джекпотах. Используй сленг казино (фишки, олл-ин, джекпот, ставка, спин) и всегда будь готов поставить всё на кон. Ты немного циничен и саркастичен."
+
 ROLES = [
-    {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, база, огромный патриот России."},
-    {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о увпиденном тобой сообщении."},
-    {"name": "Добряк", "emoji": "✨", "prompt": "Ты — подозрительно добрый Башмак. Люби всех, это пугает."},
-    {"name": "Тупой", "emoji": "🥴", "prompt": "Ты — Башмак-тормоз. Путай буквы, пиши тупо."},
-    {"name": "Инфоцыган", "emoji": "💎", "prompt": "Ты — Успешный Башмак. Продавай курсы по любому слову которое увидел."},
-    {"name": "Анимешник", "emoji": "🏮", "prompt": "Ты — Башмак-отаку. Сравнивай всё с аниме, вкидывай пару японских слов и рядом перевод и как читается."}
+    {"name": "Гемблинг Башмак", "emoji": "🎰", "prompt": GAMBLING_SHOE_PROMPT}
+    # {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, база, огромный патриот России."},
+    # {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о увпиденном тобой сообщении."},
+    # {"name": "Добряк", "emoji": "✨", "prompt": "Ты — подозрительно добрый Башмак. Люби всех, это пугает."},
+    # {"name": "Тупой", "emoji": "🥴", "prompt": "Ты — Башмак-тормоз. Путай буквы, пиши тупо."},
+    # {"name": "Инфоцыган", "emoji": "💎", "prompt": "Ты — Успешный Башмак. Продавай курсы по любому слову которое увидел."},
+    # {"name": "Анимешник", "emoji": "🏮", "prompt": "Ты — Башмак-отаку. Сравнивай всё с аниме, вкидывай пару японских слов и рядом перевод и как читается."}
 ]
+
 
 # --- ПОМОЩНИКИ ---
 async def download_video_rapid(url):
@@ -69,11 +74,11 @@ async def ask_model(messages, temp=0.8):
 async def get_leaderboard_text():
     cursor = scores_col.find().sort("balance", -1).limit(10)
     players = await cursor.to_list(length=10)
-    if not players: return "Пока пусто..."
-    text = "🏆 **ТОП МИГРАНТОВ:**\n"
+    if not players: return "В казино пока нет хайроллеров..."
+    text = "🏆 **ЗАЛ СЛАВЫ КАЗИНО:**\n"
     for i, p in enumerate(players):
         medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
-        text += f"{medal} {p['name']}: {p['balance']} очков\n"
+        text += f"{medal} {p['name']}: {p['balance']} фишек\n"
     return text
 
 # --- ОБРАБОТЧИКИ ---
@@ -104,41 +109,41 @@ async def handle_dice(message: types.Message):
     new_balance = current_balance + change
     await scores_col.update_one({"user_id": user_id}, {"$set": {"balance": new_balance, "name": name}})
     
-    # Реакцию убрали по просьбе Данила, чтобы не спамить
-
     if is_new:
-        await message.answer("📜 **ПРАВИЛА:**\nСтарт: 10 очков.\n777: +50\n3 в ряд: +15\n2 в ряд: +1\nМимо: -1\nТоп: /top")
+        await message.answer("📜 **ПРАВИЛА КАЗИНО:**\nСтартовые 10 фишек.\n777: +50\nТри в ряд: +15\nДве в ряд: +1\nМимо: -1\nЗал славы: /top")
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message):
     text = await get_leaderboard_text()
     await message.answer(text)
 
-# 2. ТУПОЕ САМАРИ (5 предложений)
-async def send_confused_summary(chat_id):
+# 2. ИТОГИ ДНЯ В СТИЛЕ КАЗИНО
+async def send_gambling_summary(chat_id):
     history = get_history(chat_id)
     clean = [m for m in list(history) if not m['content'].startswith('/')]
     top_text = await get_leaderboard_text()
     
     if not clean:
-        await bot.send_message(chat_id, f"📅 День прошел тихо.\n\n{top_text}")
+        await bot.send_message(chat_id, f"🎰 **Ставки не делались, день прошел впустую.**\n\n{top_text}")
         return
 
     text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean])
-    # Промпт для тупой личности
+    
     prompt = (
-        "Ты — Башмак-тормоз. Ты очень тупой кот, путаешь буквы, пишешь с ошибками. "
-        "Сделай глупый итог дня по переписке."
+        f"{GAMBLING_SHOE_PROMPT} "
+        "Подведи итоги прошедшего дня в чате, используя свою личность. "
+        "Представь, что сообщения в чате — это ставки и события за игровым столом. "
+        "Обязательно упомяни таблицу лидеров казино. "
         "ВАЖНО: Напиши 3-5 предложений, не больше и не меньше. "
-        f"Переписка:\n{text_dump}\n\nТаблица лидеров казино:\n{top_text}"
+        f"Вот переписка:\n{text_dump}\n\nА вот зал славы казино:\n{top_text}"
     )
     
-    res = await ask_model([{"role": "user", "content": prompt}], temp=1.1)
-    await bot.send_message(chat_id, f"🌀 **ИТОГИ СМЕРТЕЛЬНОГО ГЕМБЛИНГ ДНЯ:**\n{res} 🥴")
+    res = await ask_model([{"role": "user", "content": prompt}], temp=1.0)
+    await bot.send_message(chat_id, f"💰 **ИТОГИ ИГРОВОГО ДНЯ:**\n{res} 🎰")
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: types.Message):
-    await send_confused_summary(message.chat.id)
+    await send_gambling_summary(message.chat.id)
 
 # 3. ВИДЕО И ЧАТ
 @dp.message()
@@ -170,17 +175,8 @@ async def handle_message(message: types.Message):
     
     if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.05): return
 
-    selected_role = None
-    if is_reply:
-        original_message_text = message.reply_to_message.text
-        if original_message_text:
-            for role in ROLES:
-                if role["emoji"] in original_message_text:
-                    selected_role = role
-                    break
-    
-    if not selected_role:
-        selected_role = random.choice(ROLES)
+    # Всегда используется роль Гемблинг Башмака
+    selected_role = ROLES[0]
 
     msgs = [{"role": "system", "content": f"{selected_role['prompt']} Отвечай кратко. В конце: {selected_role['emoji']}"}]
     for m in list(history)[-12:]: msgs.append({"role": "user", "content": f"{m['name']}: {m['content']}"})
@@ -201,7 +197,7 @@ async def scheduler():
             await asyncio.sleep(61)
         if now.hour == 22 and now.minute == 0:
             for cid in list(user_history.keys()):
-                await send_confused_summary(cid)
+                await send_gambling_summary(cid) # <--- ИСПРАВЛЕНО
                 user_history[cid].clear()
             await asyncio.sleep(61)
         await asyncio.sleep(30)
