@@ -226,6 +226,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
         await message.reply(f"💰 Вы использовали **Мешочек мелочи** и получили +10 фишек! Ваш баланс: {user_doc['balance']}")
 
     elif item_key == "golden_boot":
+        await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "golden_boot_active"}}, upsert=True)
         await message.reply("⚽️ Вы использовали **Золотой Бутс**! Теперь кидайте эмодзи ⚽, чтобы ударить по воротам.")
 
     elif item_key == "chaos_cube":
@@ -355,17 +356,31 @@ async def handle_dice(message: types.Message):
 @dp.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
 async def handle_football(message: types.Message):
     user_id = message.from_user.id
+    user_doc = await scores_col.find_one({"user_id": user_id})
+
+    # Check if the user has the active effect for the Golden Boot
+    if not user_doc or "golden_boot_active" not in user_doc.get("active_effects", []):
+        return  # Ignore the roll if the item was not used
+
     dice_value = message.dice.value
-    if dice_value >= 4:
-        change = 50
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}}, upsert=True)
-        user_doc = await scores_col.find_one({"user_id": user_id})
-        await message.reply(f"ГОООЛ! Вы забили и получаете +{change} фишек! Ваш баланс: {user_doc['balance']} ⚽️")
+    change = 50 if dice_value >= 4 else -25
+
+    # Atomically update balance and remove the effect
+    await scores_col.update_one(
+        {"user_id": user_id},
+        {
+            "$inc": {"balance": change},
+            "$pull": {"active_effects": "golden_boot_active"}
+        }
+    )
+
+    updated_user_doc = await scores_col.find_one({"user_id": user_id})
+    new_balance = updated_user_doc['balance'] if updated_user_doc else 'N/A'
+
+    if change > 0:
+        await message.reply(f"ГОООЛ! Вы забили и получаете +{change} фишек! Ваш баланс: {new_balance} ⚽️")
     else:
-        change = -25
-        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": change}}, upsert=True)
-        user_doc = await scores_col.find_one({"user_id": user_id})
-        await message.reply(f"Штанга! Вы промахнулись и теряете {abs(change)} фишек... Ваш баланс: {user_doc['balance']} ⚽️")
+        await message.reply(f"Штанга! Вы промахнулись и теряете {abs(change)} фишек... Ваш баланс: {new_balance} ⚽️")
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message):
