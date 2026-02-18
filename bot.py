@@ -1,3 +1,4 @@
+
 import os, asyncio, datetime, pytz, random
 from collections import deque
 from aiogram import Bot, Dispatcher, types
@@ -111,7 +112,7 @@ async def cmd_admin_wipe(message: types.Message):
     await spin_counts_col.drop()
     await message.answer("💥 **КАЗИНО СОЖЖЕНО ДОТЛА!** 💥\nВсе ставки, инвентари и счетчики спинов обнулены.")
     bot_user = await bot.get_me()
-    await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100, "daily_start_balance": 100}}, upsert=True)
+    await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
     await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
 
 @dp.message(Command("admin_give_item"))
@@ -171,30 +172,18 @@ async def cmd_get_item(message: types.Message):
     new_balance = updated_user_doc['balance']
     await message.answer(f"Вы потратили {cost} фишек и получили: **{ITEMS[item_key]['name']}**!\nВаш новый баланс: {new_balance} фишек. 🎰")
 
-def is_use_command(message: types.Message) -> bool:
-    text = message.text
-    if not text: return False
-    if text.startswith('/use'): return True
-    bot_username = bot.get("username")
-    if text.startswith(f'@{bot_username}'):
-        parts = text.split(maxsplit=1)
-        if len(parts) > 1 and parts[1].startswith('/use'): return True
-    return False
-
-@dp.message(is_use_command)
-async def cmd_use(message: types.Message):
+@dp.message(Command("use"))
+async def cmd_use(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
-    text = message.text
-    bot_username = bot.get("username")
-    if text.startswith(f'@{bot_username}'):
-        text = text.split(maxsplit=1)[1]
-    
-    parts = text.split(maxsplit=1)
-    args = parts[1] if len(parts) > 1 else None
-    item_key = args.strip().lower() if args else None
 
-    if not item_key or item_key not in ITEMS:
+    if command.args is None:
         await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
+        return
+
+    item_key = command.args.strip().lower()
+
+    if item_key not in ITEMS:
+        await message.reply(f"Неверный предмет. Доступные: { ', '.join(ITEMS.keys()) }")
         return
 
     inventory_doc = await inventories_col.find_one({"user_id": user_id, "items": item_key})
@@ -228,24 +217,25 @@ async def cmd_use(message: types.Message):
         await message.answer(f"{message.from_user.first_name} использовал **{item['name']}** на игрока {target_name}! 😈")
         return
 
+    # --- PREDMETY BEZ CELI ---
+    await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}}) # General pull for non-target items
+
     if item_key == "money_pouch":
-        await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}})
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}})
         user_doc = await scores_col.find_one({"user_id": user_id})
         await message.reply(f"💰 Вы использовали **Мешочек мелочи** и получили +10 фишек! Ваш баланс: {user_doc['balance']}")
-        return
 
-    if item_key == "golden_boot":
-        await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}})
+    elif item_key == "golden_boot":
         await message.reply("⚽️ Вы использовали **Золотой Бутс**! Теперь кидайте эмодзи ⚽, чтобы ударить по воротам.")
-        return
 
-    if item_key == "chaos_cube":
+    elif item_key == "chaos_cube":
         bot_user = await bot.get_me()
         all_players_cursor = scores_col.find({"user_id": {"$nin": [user_id, bot_user.id]}}, {"user_id": 1, "name": 1})
         all_players = await all_players_cursor.to_list(length=None)
         if not all_players:
             await message.reply("В казино больше нет игроков, чтобы стать жертвой хаоса. 🎲")
+            # Return the item if no victims
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         
         victim = random.choice(all_players)
@@ -253,15 +243,13 @@ async def cmd_use(message: types.Message):
         victim_name = victim['name']
         roll = random.randint(1, 6)
         
-        await inventories_col.update_one({"user_id": user_id}, {"$pull": {"items": item_key}})
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": roll}})
         await scores_col.update_one({"user_id": victim_id}, {"$inc": {"balance": -roll}})
 
         user_doc = await scores_col.find_one({"user_id": user_id})
         victim_doc = await scores_col.find_one({"user_id": victim_id})
 
-        await message.answer(f"🎲 **Кубик Хаоса** в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance']}")
-        return
+        await message.answer(f"🎲 **Кубик Хаоса** в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
 
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
@@ -275,8 +263,7 @@ async def handle_dice(message: types.Message):
         is_new_user = True
         start_balance = 100
         await scores_col.insert_one({
-            "user_id": user_id, "name": user_name, "balance": start_balance,
-            "daily_start_balance": start_balance, "active_effects": []
+            "user_id": user_id, "name": user_name, "balance": start_balance, "active_effects": []
         })
         user_doc = await scores_col.find_one({'user_id': user_id})
 
@@ -315,28 +302,24 @@ async def handle_dice(message: types.Message):
         await message.answer(f"За вход в **ТЁМНОЕ КАЗИНО** списано {entry_cost} фишек... 😈")
         await asyncio.sleep(1)
 
-        if random.random() < 0.5:
-            daily_start_balance = user_doc.get('daily_start_balance', user_doc['balance'])
-            await scores_col.update_one({'user_id': user_id}, {'$set': {'balance': daily_start_balance}})
+        outcome = random.choice(['nothing', 'chips', 'items'])
+
+        if outcome == 'nothing':
+            await message.reply(f"💨 **ПУСТОТА!** 💨\nТьма поглотила твою ставку. Ты не получаешь ничего.\nТвой баланс: {current_balance} фишек. 🎰")
+
+        elif outcome == 'chips':
+            await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': 50}})
+            new_balance = current_balance + 50
+            await message.reply(f"🎉 **УСПЕХ!** 🎉\nТы обыграл тьму и получаешь **+50 фишек**! Твой новый баланс: {new_balance}. ✨")
+
+        elif outcome == 'items':
+            items_to_give = [random.choice(list(ITEMS.keys())) for _ in range(3)]
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": {"$each": items_to_give}}}, upsert=True)
             
-            inventory_doc = await inventories_col.find_one({'user_id': user_id})
-            burned_item_msg = ""
-            if inventory_doc and inventory_doc.get('items'):
-                items = inventory_doc.get('items')
-                item_to_burn = random.choice(items)
-                await inventories_col.update_one({'user_id': user_id}, {'$pull': {'items': item_to_burn}})
-                burned_item_msg = f"К тому же, у тебя сгорел предмет: **{ITEMS[item_to_burn]['name']}**!"
+            item_names = [ITEMS[key]['name'] for key in items_to_give]
+            items_text = "\n".join(f"- **{name}**" for name in item_names)
             
-            await message.reply(f"💥 **КРАХ!** 💥\nТьма поглотила твой дневной выигрыш! Баланс сброшен до **{daily_start_balance}** фишек.\n{burned_item_msg}")
-        else:
-            if random.random() < 0.5:
-                await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': 50}})
-                new_balance = current_balance + 50
-                await message.reply(f"🎉 **УСПЕХ!** 🎉\nТы обыграл тьму и получаешь **+50 фишек**! Твой баланс: {new_balance}. ✨")
-            else:
-                item_key = random.choice(list(ITEMS.keys()))
-                await inventories_col.update_one({'user_id': user_id}, {'$push': {'items': item_key}}, upsert=True)
-                await message.reply(f"🎉 **УСПЕХ!** 🎉\nТьма дарует тебе артефакт! Ты получил: **{ITEMS[item_key]['name']}**. 🎁")
+            await message.reply(f"🎉 **ДЖЕКПОТ!** 🎉\nТьма дарует тебе сокровища! Ты получил 3 предмета:\n{items_text}\n\nЗагляни в /inventory! 🎁")
         return
 
     cost_msg = f"(Спин {current_spin_number}/5) "
@@ -421,6 +404,7 @@ async def send_gambling_summary(chat_id):
 
 @dp.message()
 async def handle_message(message: types.Message):
+    # Ignore commands, bots, and dice messages in this handler
     if message.from_user.is_bot or not message.text or message.text.startswith('/') or (message.dice and message.dice.emoji in ['🎰', '⚽']):
         return
     cid = message.chat.id
@@ -452,7 +436,7 @@ async def handle_message(message: types.Message):
     
     relevant_history = [m for m in list(history) if m['content'] and not m['content'].startswith('/')][-12:]
     for m in relevant_history:
-        msgs.append({"role": "user", 'content': f'{m['name']}: {m['content']}'})
+        msgs.append({"role": "user", 'content': f'{m["name"]}: {m["content"]}'})
 
     await bot.send_chat_action(cid, "typing")
     reply = await ask_model(msgs)
@@ -462,9 +446,8 @@ async def handle_message(message: types.Message):
 
 # --- ПЛАНИРОВЩИК ---
 async def reset_daily_state():
-    await scores_col.update_many({}, [{"$set": {"daily_start_balance": "$balance"}}])
     await spin_counts_col.delete_many({})
-    print(f"[{datetime.datetime.now()}] Daily game state has been reset.")
+    print(f"[{datetime.datetime.now()}] Daily spin counts have been reset.")
 
 async def scheduler():
     while True:
@@ -494,6 +477,7 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     
     me = await bot.get_me()
+    # Set bot username for later use, e.g. in message handlers
     bot.username = me.username
 
     main_commands = [
