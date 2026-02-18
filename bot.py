@@ -14,6 +14,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RAPID_KEY = os.getenv("RAPIDAPI_KEY")
 MONGO_URL = os.getenv("MONGO_URL")
+# ВАЖНО: Укажите ваш Telegram ID в переменных окружения для доступа к админ-командам
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 # Инициализация
 client = AsyncGroq(api_key=GROQ_API_KEY)
@@ -38,12 +40,6 @@ GAMBLING_SHOE_PROMPT = "Ты — Гемблинг Башмак, азартный
 
 ROLES = [
     {"name": "Гемблинг Башмак", "emoji": "🎰", "prompt": GAMBLING_SHOE_PROMPT}
-    # {"name": "Стандарт", "emoji": "😼", "prompt": "Ты — Башмак, язвительный кот Данила. Сарказм, база, огромный патриот России."},
-    # {"name": "Философ", "emoji": "🧘‍♂️", "prompt": "Ты — Башмак-философ. Рассуждай о увпиденном тобой сообщении."},
-    # {"name": "Добряк", "emoji": "✨", "prompt": "Ты — подозрительно добрый Башмак. Люби всех, это пугает."},
-    # {"name": "Тупой", "emoji": "🥴", "prompt": "Ты — Башмак-тормоз. Путай буквы, пиши тупо."},
-    # {"name": "Инфоцыган", "emoji": "💎", "prompt": "Ты — Успешный Башмак. Продавай курсы по любому слову которое увидел."},
-    # {"name": "Анимешник", "emoji": "🏮", "prompt": "Ты — Башмак-отаку. Сравнивай всё с аниме, вкидывай пару японских слов и рядом перевод и как читается."}
 ]
 
 
@@ -83,41 +79,74 @@ async def get_leaderboard_text():
 
 # --- ОБРАБОТЧИКИ ---
 
-# 1. КАЗИНО (Без лишней болтовни)
+# 1. АДМИН-ПАНЕЛЬ
+@dp.message(Command("admin_wipe_scores_777"))
+async def cmd_admin_wipe(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("К этой кнопке допускаются только крупные игроки. 🎰")
+    
+    await scores_col.drop()
+    await message.answer("💥 **КАЗИНО СОЖЖЕНО ДОТЛА!** 💥\nВсе ставки обнулены. Начинается 'Смертельная Гемблинг Миграция'.")
+    
+    # Добавляем Башмака как игрока
+    bot_user = await bot.get_me()
+    await scores_col.update_one(
+        {"user_id": bot_user.id},
+        {"$set": {"name": "Гемблинг Башмак", "balance": 100}},
+        upsert=True
+    )
+    await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
+
+@dp.message(Command("bashmak_roll"))
+async def cmd_bashmak_roll(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.answer("Не тебе решать, когда мне рисковать. 🎰")
+    await bot.send_dice(message.chat.id, emoji='🎰')
+
+
+# 2. КАЗИНО (Ивент "Смертельная Гемблинг Миграция")
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰')
 async def handle_dice(message: types.Message):
     user_id = message.from_user.id
     name = message.from_user.first_name
+    
+    # Башмак использует свое имя
+    if user_id == bot.id:
+        name = "Гемблинг Башмак"
+
     user_doc = await scores_col.find_one({"user_id": user_id})
     is_new = False
     
     if not user_doc:
         is_new = True
-        await scores_col.insert_one({"user_id": user_id, "name": name, "balance": 10})
-        current_balance = 10
+        # Новые правила миграции!
+        start_balance = 100
+        await scores_col.insert_one({"user_id": user_id, "name": name, "balance": start_balance})
+        current_balance = start_balance
     else:
         current_balance = user_doc['balance']
 
     v = message.dice.value - 1
     reels = [v % 4, (v // 4) % 4, v // 16]
     
-    if message.dice.value == 64: change = 50
-    elif reels[0] == reels[1] == reels[2]: change = 15
-    elif reels[0] == reels[1] or reels[1] == reels[2]: change = 1
-    else: change = -1
+    # Расчет выигрыша/проигрыша
+    if message.dice.value == 64: change = 50      # 777
+    elif reels[0] == reels[1] == reels[2]: change = 15 # Три в ряд
+    elif reels[0] == reels[1] or reels[1] == reels[2]: change = 1 # Две в ряд
+    else: change = -1 # Мимо
 
     new_balance = current_balance + change
     await scores_col.update_one({"user_id": user_id}, {"$set": {"balance": new_balance, "name": name}})
     
     if is_new:
-        await message.answer("📜 **ПРАВИЛА КАЗИНО:**\nСтартовые 10 фишек.\n777: +50\nТри в ряд: +15\nДве в ряд: +1\nМимо: -1\nЗал славы: /top")
+        await message.answer(f"Добро пожаловать в 'Смертельную Гемблинг Миграцию'!\n\n📜 **ПРАВИЛА ИВЕНТА:**\nСтартовые 100 фишек.\n777: +50\nТри в ряд: +15\nДве в ряд: +1\nМимо: -1\n\nЗал славы: /top\nДа начнется игра! 🎰")
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message):
     text = await get_leaderboard_text()
     await message.answer(text)
 
-# 2. ИТОГИ ДНЯ В СТИЛЕ КАЗИНО
+# 3. ИТОГИ ДНЯ В СТИЛЕ КАЗИНО
 async def send_gambling_summary(chat_id):
     history = get_history(chat_id)
     clean = [m for m in list(history) if not m['content'].startswith('/')]
@@ -145,7 +174,7 @@ async def send_gambling_summary(chat_id):
 async def cmd_summary(message: types.Message):
     await send_gambling_summary(message.chat.id)
 
-# 3. ВИДЕО И ЧАТ
+# 4. ВИДЕО И ЧАТ
 @dp.message()
 async def handle_message(message: types.Message):
     if message.from_user.is_bot or not message.text: return
@@ -190,14 +219,15 @@ async def handle_message(message: types.Message):
 async def scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
-        if now.hour == 13 and now.minute == 37:
-            for cid in list(user_history.keys()):
-                try: await bot.send_dice(cid, emoji='🎰')
-                except: pass
-            await asyncio.sleep(61)
+        # Авто-бросок от Башмака в 13:37 - УБРАН, чтобы не спамить и контролировать через админа
+        # if now.hour == 13 and now.minute == 37:
+        #     for cid in list(user_history.keys()):
+        #         try: await bot.send_dice(cid, emoji='🎰')
+        #         except: pass
+        #     await asyncio.sleep(61)
         if now.hour == 22 and now.minute == 0:
             for cid in list(user_history.keys()):
-                await send_gambling_summary(cid) # <--- ИСПРАВЛЕНО
+                await send_gambling_summary(cid)
                 user_history[cid].clear()
             await asyncio.sleep(61)
         await asyncio.sleep(30)
