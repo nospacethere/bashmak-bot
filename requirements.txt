@@ -1,6 +1,6 @@
 aiogram
 groq
 aiohttp
-pytz
 motor
-dnspython
+apscheduler
+pytz
