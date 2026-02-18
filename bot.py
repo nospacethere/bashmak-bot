@@ -131,7 +131,7 @@ async def get_leaderboard_text():
     text = "🏆 **ЗАЛ СЛАВЫ КАЗИНО:**\n"
     for i, p in enumerate(players):
         medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
-        text += f"{medal} {p['name']}: {p['balance']} фишек\n"
+        text += f"{p['name']}: {p['balance']} фишек\n"
     return text
 
 # --- ОБРАБОТЧИКИ ---
@@ -157,6 +157,13 @@ async def cmd_admin_give_item(message: types.Message, command: CommandObject):
         return
     await inventories_col.update_one({"user_id": message.from_user.id}, {"$push": {"items": item_key}}, upsert=True)
     await message.answer(f"Вы получили: **{ITEMS[item_key]['name']}**")
+
+@dp.message(Command("admin_give_random_item"))
+async def cmd_admin_give_random_item(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    item_key = random.choice(list(ITEMS.keys()))
+    await inventories_col.update_one({"user_id": message.from_user.id}, {"$push": {"items": item_key}}, upsert=True)
+    await message.answer(f"Вы получили случайный предмет: **{ITEMS[item_key]['name']}**")
 
 @dp.message(Command("bashmak_roll"))
 async def cmd_bashmak_roll(message: types.Message):
@@ -185,6 +192,36 @@ async def cmd_inventory(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(text, reply_markup=keyboard)
 
+@dp.message(Command("get_item"))
+async def cmd_get_item(message: types.Message):
+    user_id = message.from_user.id
+    cost = 50
+
+    user_doc = await scores_col.find_one({"user_id": user_id})
+
+    # Ensure the user is in the database
+    if not user_doc:
+        await message.reply("Вы еще не играли в казино! Сделайте ставку, чтобы начать. 🎰")
+        return
+
+    if user_doc.get('balance', 0) < cost:
+        await message.reply(f"Недостаточно фишек для покупки случайного предмета. Стоимость: {cost} фишек. 🎰")
+        return
+
+    await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -cost}})
+
+    item_key = random.choice(list(ITEMS.keys()))
+    await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}}, upsert=True)
+    
+    # Get updated balance to show the user
+    updated_user_doc = await scores_col.find_one({"user_id": user_id})
+    new_balance = updated_user_doc['balance']
+
+    await message.answer(
+        f"Вы потратили {cost} фишек и получили случайный предмет: **{ITEMS[item_key]['name']}**!\n"
+        f"Ваш новый баланс: {new_balance} фишек. 🎰"
+    )
+
 @dp.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -210,8 +247,10 @@ async def cmd_use(message: types.Message, command: CommandObject):
         if target_user.id == user_id:
             await message.reply("Нельзя использовать это на себя! 🎰")
             return
-        if target_user.is_bot:
-            await message.reply("Боты невосприимчивы к магии предметов. 🤖")
+        
+        bot_user = await bot.get_me()
+        if target_user.is_bot and target_user.id != bot_user.id:
+            await message.reply("Боты невосприимчивы к магии предметов (кроме меня, конечно). 🤖")
             return
 
         target_id = target_user.id
@@ -413,7 +452,8 @@ async def main():
     # Установка команд
     main_commands = [
         BotCommand(command="inventory", description="🎒 Открыть инвентарь"),
-        BotCommand(command="top", description="🏆 Посмотреть таблицу лидеров")
+        BotCommand(command="top", description="🏆 Посмотреть таблицу лидеров"),
+        BotCommand(command="get_item", description="🎲 Купить случайный предмет (50 фишек)")
     ]
     await bot.set_my_commands(main_commands)
 
