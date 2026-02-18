@@ -195,7 +195,7 @@ async def cmd_inventory(message: types.Message):
 @dp.message(Command("get_item"))
 async def cmd_get_item(message: types.Message):
     user_id = message.from_user.id
-    cost = 50
+    cost = 10
 
     user_doc = await scores_col.find_one({"user_id": user_id})
 
@@ -222,10 +222,29 @@ async def cmd_get_item(message: types.Message):
         f"Ваш новый баланс: {new_balance} фишек. 🎰"
     )
 
-@dp.message(Command("use"))
-async def cmd_use(message: types.Message, command: CommandObject):
+def is_use_command(message: types.Message) -> bool:
+    if not message.text:
+        return False
+    text = message.text
+    if text.startswith('/use'):
+        return True
+    if text.startswith('@'):
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1 and parts[1].startswith('/use'):
+            return True
+    return False
+
+@dp.message(is_use_command)
+async def cmd_use(message: types.Message):
+    text = message.text
+    if text.startswith('@'):
+        text = text.split(maxsplit=1)[1]
+    
+    parts = text.split(maxsplit=1)
+    args = parts[1] if len(parts) > 1 else None
+    
     user_id = message.from_user.id
-    item_key = command.args.strip().lower() if command.args else None
+    item_key = args.strip().lower() if args else None
 
     if not item_key or item_key not in ITEMS:
         await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
@@ -453,7 +472,7 @@ async def main():
     main_commands = [
         BotCommand(command="inventory", description="🎒 Открыть инвентарь"),
         BotCommand(command="top", description="🏆 Посмотреть таблицу лидеров"),
-        BotCommand(command="get_item", description="🎲 Купить случайный предмет (50 фишек)")
+        BotCommand(command="get_item", description="🎲 Купить случайный предмет (10 фишек)")
     ]
     await bot.set_my_commands(main_commands)
 
