@@ -642,8 +642,9 @@ def schedule_bot_spins():
 
 async def execute_bot_spin():
     bot_user = await bot.get_me()
+    bot_id = bot_user.id
     
-    spin_count_doc = await spin_counts_col.find_one({'user_id': bot_user.id})
+    spin_count_doc = await spin_counts_col.find_one({'user_id': bot_id})
     spin_count = spin_count_doc.get('count', 0) if spin_count_doc else 0
     if spin_count >= 2:
         print(f"[{datetime.datetime.now()}] Bot has already spun twice today.")
@@ -657,20 +658,51 @@ async def execute_bot_spin():
     dice_value = random.randint(1, 64)
     change = calculate_win(dice_value)
 
-    await scores_col.update_one({"user_id": bot_user.id}, {"$inc": {"balance": change}}, upsert=True)
-    await spin_counts_col.update_one({'user_id': bot_user.id}, {'$inc': {'count': 1}}, upsert=True)
+    bot_doc = await scores_col.find_one({'user_id': bot_id})
+    if not bot_doc:
+        await scores_col.update_one({"user_id": bot_id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
+        bot_doc = await scores_col.find_one({'user_id': bot_id})
+
+    final_change = change
+    active_effects = bot_doc.get('active_effects', [])
+    effects_to_remove = []
+    effect_message = None
+
+    if "madness_coin" in active_effects:
+        is_shield = random.random() < 0.5
+        original_change = final_change
+        
+        if is_shield:
+            if final_change < 0: final_change = 0
+            effect_message = f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} был отменен."
+        else:
+            if final_change > 0: final_change = 0
+            effect_message = f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} был отменен."
+        effects_to_remove.append("madness_coin")
+
+    update_query = {"$inc": {"balance": final_change}}
+    if effects_to_remove:
+        update_query["$pull"] = {"active_effects": {"$in": effects_to_remove}}
     
-    bot_doc = await scores_col.find_one({"user_id": bot_user.id})
-    new_balance = bot_doc.get("balance", "N/A")
+    await scores_col.update_one({'user_id': bot_id}, update_query)
+    await spin_counts_col.update_one({'user_id': bot_id}, {'$inc': {'count': 1}}, upsert=True)
+    
+    bot_doc_after = await scores_col.find_one({"user_id": bot_id})
+    new_balance = bot_doc_after.get("balance", "N/A")
 
-    result_text = ""
-    if change >= 10: result_text = f"сорвал крупный куш в {change} фишек!"
-    elif change > 0: result_text = f"выиграл {change} фишки."
-    else: result_text = f"проиграл {abs(change)} фишек."
+    if effect_message:
+         message_text = (f"🎲 Гемблинг Башмак делает свой ход! 🎲\n\n"
+                        f"{effect_message}\n"
+                        f"Теперь его баланс: {new_balance} фишек. 😼")
+    else:
+        result_text = ""
+        if change >= 10: result_text = f"сорвал крупный куш в {change} фишек!"
+        elif change > 0: result_text = f"выиграл {change} фишки."
+        else: result_text = f"проиграл {abs(change)} фишек."
 
-    message_text = (f"🎲 Гемблинг Башмак делает свой ход! 🎲\n\n"
-                    f"Кот-крупье {result_text}\n"
-                    f"Теперь его баланс: {new_balance} фишек. 😼")
+        message_text = (f"🎲 Гемблинг Башмак делает свой ход! 🎲\n\n"
+                        f"Кот-крупье {result_text}\n"
+                        f"Теперь его баланс: {new_balance} фишек. 😼")
 
     for cid in all_chat_ids:
         try:
@@ -689,9 +721,9 @@ async def execute_bot_item_use():
         print(f"[{datetime.datetime.now()}] Bot has no items to use.")
         return
 
-    non_target_items = ["chaos_cube", "money_pouch", "stone_rain"]
+    bot_usable_items = ["chaos_cube", "money_pouch", "stone_rain", "golden_boot", "madness_coin"]
     
-    available_items = [item for item in inventory_doc.get("items", []) if item in non_target_items]
+    available_items = [item for item in inventory_doc.get("items", []) if item in bot_usable_items]
     
     if not available_items:
         print(f"[{datetime.datetime.now()}] Bot has no non-target items to use.")
@@ -761,6 +793,23 @@ async def execute_bot_item_use():
                             f"Под раздачу попал {victim_name}! Башмак крадет у него {roll} фишек.\n"
                             f"Баланс Башмака: {bot_doc.get('balance', 'N/A')}\n"
                             f"Баланс {victim_name}: {victim_doc.get('balance', 'N/A')}")
+
+    elif item_key_to_use == "golden_boot":
+        dice_value = random.randint(1, 6)
+        change = 10 if dice_value >= 4 else -10
+        await scores_col.update_one({"user_id": bot_id}, {"$inc": {"balance": change}})
+        bot_doc = await scores_col.find_one({"user_id": bot_id})
+        new_balance = bot_doc.get("balance", "N/A")
+
+        result_text = f"забивает гол и получает {abs(change)} фишек!" if change > 0 else f"промахивается и теряет {abs(change)} фишек."
+        announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
+                        f"Кот-крупье бьет по воротам и... {result_text}\n"
+                        f"Его баланс теперь: {new_balance} фишек. ⚽️")
+
+    elif item_key_to_use == "madness_coin":
+        await scores_col.update_one({"user_id": bot_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
+        announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
+                        f"Следующий спин кота-крупье будет... безумным. 🌓")
 
     if announcement:
         all_chat_ids = list(user_history.keys())
