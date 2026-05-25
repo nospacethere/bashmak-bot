@@ -371,6 +371,10 @@ async def handle_dice(message: types.Message):
     if not user_doc:
         is_new_user = True
         start_balance = 100
+        # Give a random item to the new user
+        starter_item_key = random.choice(list(ITEMS.keys()))
+        await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": starter_item_key}}, upsert=True)
+
         await scores_col.insert_one({
             "user_id": user_id, "name": user_name, "balance": start_balance, "active_effects": []
         })
@@ -387,13 +391,16 @@ async def handle_dice(message: types.Message):
     current_balance = user_doc.get('balance', 0)
 
     if is_new_user:
+        starter_item_doc = await inventories_col.find_one({"user_id": user_id})
+        starter_item_key = starter_item_doc['items'][0]
+        starter_item_name = ITEMS[starter_item_key]['name']
         item_descriptions = "\n".join([f"- {item['name']}: {item['description']}" for item in ITEMS.values()])
         
         welcome_text = f'''😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
 
 Здесь удача улыбается смелым, а риск — второе имя. Твоя цель — сорвать куш, подняться в таблице лидеров (/top) и стать легендой этого заведения.
 
-Ты начинаешь со 100 фишками. Вот правила:
+Ты начинаешь со 100 фишками и стартовым бонусом: тебе достался предмет «{starter_item_name}»! Проверь его в /inventory.
 
 ---
 
