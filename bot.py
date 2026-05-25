@@ -518,40 +518,56 @@ async def handle_dice(message: types.Message):
 
     cost_msg = f"(Спин {current_spin_number}/2) "
 
-    change = calculate_win(message.dice.value)
-    final_change = change
+    base_change = calculate_win(message.dice.value)
+    final_change = base_change
     
     active_effects = user_doc.get('active_effects', [])
     effects_to_remove = []
     effect_messages = []
 
+    # --- ПРИМЕНЕНИЕ ЭФФЕКТОВ ---
+    # Эффекты применяются в строгом порядке для корректного взаимодействия.
+    # 1. Двойная ставка (чтобы другие эффекты работали с удвоенным значением)
+    # 2. Монета безумия (чтобы отменять уже удвоенный выигрыш/проигрыш)
+
+    # 1. Эффект "Двойная Ставка"
     if "double_down" in active_effects:
         final_change *= 2
         effect_messages.append(f"⏫ Двойная Ставка удваивает результат!")
         effects_to_remove.append("double_down")
 
+    # 2. Эффект "Монета Безумия"
     if "madness_coin" in active_effects:
         is_shield = random.random() < 0.5
-        original_change = final_change
         
+        # Запоминаем значение ДО возможной отмены, чтобы показать его в сообщении
+        change_before_cancellation = final_change 
+        
+        # 50% шанс: отмена проигрыша
         if is_shield and final_change < 0:
             final_change = 0
-            effect_messages.append(f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен.")
+            effect_messages.append(f"🌓 Сработал ЩИТ Монеты Безумия! Проигрыш {change_before_cancellation} отменен.")
+        # 50% шанс: отмена выигрыша
         elif not is_shield and final_change > 0:
             final_change = 0
-            effect_messages.append(f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен.")
-            
+            effect_messages.append(f"🌓 Сработала ПУСТОТА Монеты Безумия! Выигрыш {change_before_cancellation} отменен.")
+        # Если эффект монеты не сработал (например, выигрыш при щите или проигрыш при пустоте), просто добавляем информацию
+        else:
+             effect_messages.append(f"🌓 Монета Безумия была использована, но ее эффект не пригодился.")
+
         effects_to_remove.append("madness_coin")
         
+    # --- ОБНОВЛЕНИЕ БАЛАНСА И УДАЛЕНИЕ ЭФФЕКТОВ ---
     update_query = {"$inc": {"balance": final_change}}
     if effects_to_remove:
+        # Используем $pull, чтобы удалить все сработавшие эффекты из массива
         update_query["$pull"] = {"active_effects": {"$in": effects_to_remove}}
     await scores_col.update_one({'user_id': user_id}, update_query)
     
     new_balance = current_balance + final_change
 
-    # Логика Вампирского Амулета
-    if change > 0:
+    # Логика Вампирского Амулета (срабатывает на ОСНОВНОЙ выигрыш, до его отмены)
+    if base_change > 0:
         amulet = await amulets_col.find_one({"victim_id": user_id, "expires_at": {"$gt": datetime.datetime.now(pytz.utc)}})
         if amulet:
             victim_doc_amulet = await scores_col.find_one({'user_id': user_id})
@@ -562,7 +578,7 @@ async def handle_dice(message: types.Message):
                 effect_messages.append(f"🩸 Вампирский Амулет игрока {owner_name} попытался сработать, но ваш Щит Справедливости заблокировал кражу! Щит разрушен. 🛡️")
             else:
                 owner_id = amulet['owner_id']
-                stolen_amount = int(change * 0.5)
+                stolen_amount = int(base_change * 0.5) # Воруем от базового выигрыша
                 
                 await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -stolen_amount}})
                 await scores_col.update_one({"user_id": owner_id}, {"$inc": {"balance": stolen_amount}}, upsert=True)
@@ -582,9 +598,10 @@ async def handle_dice(message: types.Message):
     if full_effect_message:
         await message.reply(f"{cost_msg}{full_effect_message} Итог: {final_change}. Баланс: {new_balance} 🎰")
     else:
-        if change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
-        elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
-        else: await message.reply(f"{cost_msg}Мимо. {change}. Баланс: {new_balance} 🎰")
+        # Сообщение по умолчанию, если не было эффектов
+        if base_change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{base_change}. Баланс: {new_balance} 🎰")
+        elif base_change > 0: await message.reply(f"{cost_msg}Держи +{base_change}. Баланс: {new_balance} 🎰")
+        else: await message.reply(f"{cost_msg}Мимо. {base_change}. Баланс: {new_balance} 🎰")
 
 @dp.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
 async def handle_football(message: types.Message):
@@ -1029,8 +1046,7 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
-    await site.start()
-    
+    await site.start()    
     schedule_bot_spins()
     asyncio.create_task(scheduler())
     await bot.delete_webhook(drop_pending_updates=True)
