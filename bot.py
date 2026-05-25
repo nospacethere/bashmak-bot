@@ -37,7 +37,8 @@ ITEMS = {
     "chaos_cube": {"name": "🎲 Кубик Хаоса", "description": "Вычитает случайное число (1-6) у случайного игрока и добавляет вам.", "requires_target": False},
     "madness_coin": {"name": "🌓 Монета Безумия", "description": "50/50 шанс удвоить ваш следующий выигрыш или превратить его в убыток.", "requires_target": False},
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
-    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам.", "requires_target": False}
+    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам.", "requires_target": False},
+    "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False}
 }
 
 user_history = {}
@@ -259,6 +260,34 @@ async def cmd_use(message: types.Message, command: CommandObject):
     elif item_key == "madness_coin":
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
         await message.reply("🌓 Вы использовали **Монету Безумия**! Ваш следующий спин определит судьбу. Удачи... или нет. 😈")
+    
+    elif item_key == "stone_rain":
+        all_players_cursor = scores_col.find({}, {"user_id": 1, "name": 1})
+        all_players = await all_players_cursor.to_list(length=None)
+        
+        if not all_players:
+            await message.reply("В казино нет игроков, чтобы устроить апокалипсис. 🌧️")
+            # Return the item if no one is playing
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
+            return
+
+        update_summary = []
+        bot_user = await bot.get_me()
+        for player in all_players:
+            player_id = player['user_id']
+            player_name = player.get('name', 'Неизвестный игрок')
+            change = random.randint(-5, 5)
+            
+            await scores_col.update_one({"user_id": player_id}, {"$inc": {"balance": change}})
+            
+            if player_id == bot_user.id:
+                player_name = "Гемблинг Башмак"
+
+            sign = "+" if change >= 0 else ""
+            update_summary.append(f"{player_name}: {sign}{change}")
+
+        summary_message = "🌧️ **Начался дождь из камней!** 🌧️\nФишки всех игроков изменились:\n" + "\n".join(update_summary)
+        await message.answer(summary_message)
 
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
