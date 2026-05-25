@@ -40,7 +40,9 @@ ITEMS = {
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
     "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам. За гол вы получаете +10 фишек, за промах -10.", "requires_target": False},
     "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False},
-    "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False}
+    "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False},
+    "generous_jackpot": {"name": "🎉 Щедрый Джекпот", "description": "Вы получаете +10 фишек, а все остальные игроки — от 1 до 5 фишек.", "requires_target": False},
+    "double_down": {"name": "⏫ Двойная Ставка", "description": "Активируйте перед спином, чтобы удвоить и выигрыш, и проигрыш.", "requires_target": False}
 }
 
 user_history = {}
@@ -354,6 +356,33 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
                 f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
             )
 
+    elif item_key == "generous_jackpot":
+        await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}}, upsert=True)
+        user_doc = await scores_col.find_one({"user_id": user_id})
+        new_balance = user_doc.get('balance', 10)
+
+        bot_user = await bot.get_me()
+        other_players_cursor = scores_col.find({"user_id": {"$nin": [user_id, bot_user.id]}})
+        other_players = await other_players_cursor.to_list(length=None)
+
+        update_summary = [f"Вы получили +10 фишек. Ваш новый баланс: {new_balance} фишек."]
+        
+        if not other_players:
+            await context_message.answer(f"🎉 Вы использовали Щедрый Джекпот! {update_summary[0]}. В казино нет других игроков, чтобы поделиться щедростью.")
+            return
+
+        for player in other_players:
+            player_id = player['user_id']
+            player_name = player.get('name', 'Неизвестный игрок')
+            amount = random.randint(1, 5)
+            await scores_col.update_one({"user_id": player_id}, {"$inc": {"balance": amount}})
+            player_doc_after = await scores_col.find_one({"user_id": player_id})
+            player_new_balance = player_doc_after.get('balance', 'N/A')
+            update_summary.append(f"{player_name} получил +{amount} фишек (итого: {player_new_balance}).")
+
+        summary_message = "🎉 Вы использовали Щедрый Джекпот! 🎉\n\n" + "\n".join(update_summary)
+        await context_message.answer(summary_message)
+
 @dp.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
     if command.args is None:
@@ -455,6 +484,11 @@ async def handle_dice(message: types.Message):
     effects_to_remove = []
     effect_message = None
 
+    if "double_down" in active_effects:
+        final_change *= 2
+        effect_message = f"⏫ Двойная Ставка удваивает результат! "
+        effects_to_remove.append("double_down")
+
     if "madness_coin" in active_effects:
         is_shield = random.random() < 0.5
         original_change = final_change
@@ -463,12 +497,12 @@ async def handle_dice(message: types.Message):
             # SHIELD: Nullify loss
             if final_change < 0:
                 final_change = 0
-            effect_message = f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен. "
+            effect_message = (effect_message or "") + f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен. "
         else:
             # VOID: Nullify win
             if final_change > 0:
                 final_change = 0
-            effect_message = f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен. "
+            effect_message = (effect_message or "") + f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен. "
             
         effects_to_remove.append("madness_coin")
         
@@ -480,7 +514,7 @@ async def handle_dice(message: types.Message):
     new_balance = current_balance + final_change
 
     if effect_message:
-        await message.reply(f"{cost_msg}{effect_message}Баланс: {new_balance} 🎰")
+        await message.reply(f"{cost_msg}{effect_message}Итог: {final_change}. Баланс: {new_balance} 🎰")
     else:
         if change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
         elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
@@ -769,7 +803,6 @@ async def execute_bot_item_use():
             announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
                             f"{item_info['description']}\n\n"
                             f"Результаты:\n{summary_str}")
-
     elif item_key_to_use == "chaos_cube":
         other_players_cursor = scores_col.find({"user_id": {"$ne": bot_id}}, {"user_id": 1, "name": 1})
         other_players = await other_players_cursor.to_list(length=None)
