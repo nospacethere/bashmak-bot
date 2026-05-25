@@ -31,6 +31,7 @@ db = mongo_client['bashmak_db']
 scores_col = db['scores']
 inventories_col = db['inventories']
 spin_counts_col = db['spin_counts']
+game_state_col = db['game_state']
 
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
@@ -127,7 +128,8 @@ async def cmd_admin_wipe(message: types.Message):
     await scores_col.drop()
     await inventories_col.drop()
     await spin_counts_col.drop()
-    await message.answer("💥 Казино сожжено дотла! 💥\nВсе ставки, инвентари и счетчики спинов обнулены.")
+    await game_state_col.drop()
+    await message.answer("💥 Казино сожжено дотла! 💥\nВсе ставки, инвентари, счетчики спинов и состояние игры обнулены.")
     bot_user = await bot.get_me()
     await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
     await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
@@ -366,6 +368,10 @@ async def handle_dice(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name
 
+    game_state_doc = await game_state_col.find_one()
+    if not game_state_doc:
+        await game_state_col.insert_one({"start_date": datetime.datetime.now(pytz.timezone('Europe/Moscow'))})
+
     user_doc = await scores_col.find_one({'user_id': user_id})
     is_new_user = False
     if not user_doc:
@@ -407,6 +413,8 @@ async def handle_dice(message: types.Message):
 🎲 ПРАВИЛА СПИНОВ
 
 У тебя есть 2 бесплатные попытки в день. Каждая ставка может изменить всё. Используй их с умом!
+
+Игра длится 14 дней. В конце сезона казино закрывается, а лучшие игроки попадают в Зал Славы!
 
 ---
 
@@ -516,10 +524,9 @@ async def send_gambling_summary(chat_id):
 
     text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean])
     prompt = (f"{GAMBLING_SHOE_PROMPT} "
-              "Подведи итоги прошедшего дня в чате, используя свою личность. "
-              "Представь, что сообщения в чате — это ставки и события за игровым столом. "
-              "Обязательно упомяни таблицу лидеров казино. "
-              "ВАЖНО: Напиши 3-5 предложений, не больше и не меньше. "
+              "Подведи краткие итоги дня в казино. "
+              "Обязательно упомяни таблицу лидеров. "
+              "ВАЖНО: Напиши 2-3 предложения. "
               f"Вот переписка:\n{text_dump}\n\nА вот зал славы казино:\n{top_text}"
              )
     
@@ -789,9 +796,29 @@ async def reset_daily_state():
     schedule_bot_spins()
     print(f"[{datetime.datetime.now()}] Daily spin counts have been reset.")
 
+async def end_game(chat_id):
+    top_text = await get_leaderboard_text()
+    announcement = f"🎉 Игровой сезон окончен! 🎉\n\n14 дней пролетели как один миг! Казино «Гемблинг Башмак» закрывает свои двери... до следующего раза.\n\nА вот и наши легенды, сорвавшие куш:\n{top_text}\n\nСпасибо за игру! Фишки и инвентарь обнулены. Новый сезон начнется, как только появится первый игрок. До новых встреч, лудоманы! 🎰"
+    await bot.send_message(chat_id, announcement)
+    await scores_col.drop()
+    await inventories_col.drop()
+    await spin_counts_col.drop()
+    await game_state_col.drop()
+
 async def scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+
+        game_state_doc = await game_state_col.find_one()
+        if game_state_doc:
+            start_date = game_state_doc['start_date']
+            if (now - start_date).days >= 14:
+                all_chat_ids = list(user_history.keys())
+                for cid in all_chat_ids:
+                    await end_game(cid)
+                user_history.clear()
+                await asyncio.sleep(61)
+                continue
 
         if now.hour == 0 and now.minute == 0:
             await reset_daily_state()
@@ -829,7 +856,8 @@ async def scheduler():
 async def main():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bashmak is alive"))
-    runner = web.AppRunner(app); await runner.setup()
+    runner = web.AppRunner(app)
+    await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
     await site.start()
     
