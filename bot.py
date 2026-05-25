@@ -13,7 +13,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # --- КОНФИГ ---
 TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-RAPID_KEY = os.getenv("RAPIDAPI_KEY")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
@@ -66,45 +65,26 @@ def calculate_win(dice_value):
     else: return -5
 
 # --- ПОМОЩНИКИ ---
-async def download_video(url: str):
-    """Downloads a video from a URL using yt-dlp and returns the local file path."""
-    video_path = None
-    try:
-        filename = f"temp_video_{random.randint(10000, 99999)}.mp4"
-
-        process = await asyncio.create_subprocess_exec(
-            'yt-dlp',
-            '-f', 'bestvideo[ext=mp4][height<=720][filesize<49M]+bestaudio[ext=m4a]/best[ext=mp4][filesize<49M]/best',
-            '--merge-output-format', 'mp4',
-            '-o', filename,
-            url,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-
-        if process.returncode == 0 and os.path.exists(filename):
-            if os.path.getsize(filename) < 50 * 1024 * 1024:
-                video_path = filename
-            else:
-                os.remove(filename)
-                print(f"Downloaded file {filename} was too large.")
-                return None
-        else:
-            print(f"yt-dlp failed for url {url}. Return code: {process.returncode}")
-            print(f"stderr: {stderr.decode(errors='ignore')}")
-            if os.path.exists(filename):
-                os.remove(filename)
+async def download_video_cobalt(url: str):
+    api_url = "https://co.wuk.sh/api/json"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    payload = {"url": url, "vQuality": "720", "isNoTTWatermark": True, "isAudioOnly": False}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(api_url, json=payload, headers=headers, timeout=60) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("status") == "stream" and data.get("url"):
+                        return {"url": data["url"]}
+                    else:
+                        print(f"Cobalt API failed with status: {data.get('status')}, text: {data.get('text')}")
+                        return None
+                else:
+                    print(f"Cobalt API request failed with status code: {resp.status}")
+                    return None
+        except Exception as e:
+            print(f"Cobalt API request error: {e}")
             return None
-
-    except Exception as e:
-        print(f"Exception during video download: {e}")
-        if video_path and os.path.exists(video_path):
-            os.remove(video_path)
-        return None
-        
-    return video_path
 
 async def ask_model(messages, temp=0.8):
     if not client: return "Башмак отдыхает."
@@ -117,12 +97,12 @@ async def get_leaderboard_text():
     cursor = scores_col.find().sort("balance", -1).limit(10)
     players = await cursor.to_list(length=10)
     if not players: return "В казино пока нет хайроллеров..."
-    text = "🏆 Зал славы казино:\\n"
+    text = "🏆 Зал славы казино:\n"
     for i, p in enumerate(players):
         medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
         name = p.get('name', 'Anon')
         balance = p.get('balance', 0)
-        text += f"{medal} {name}: {balance} фишек\\n"
+        text += f"{medal} {name}: {balance} фишек\n"
     return text
 
 # --- ОБРАБОТЧИКИ ---
@@ -134,7 +114,7 @@ async def cmd_admin_wipe(message: types.Message):
     await scores_col.drop()
     await inventories_col.drop()
     await spin_counts_col.drop()
-    await message.answer("💥 Казино сожжено дотла! 💥\\nВсе ставки, инвентари и счетчики спинов обнулены.")
+    await message.answer("💥 Казино сожжено дотла! 💥\nВсе ставки, инвентари и счетчики спинов обнулены.")
     bot_user = await bot.get_me()
     await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
     await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
@@ -156,16 +136,16 @@ async def cmd_inventory(message: types.Message):
     user_id = message.from_user.id
     inventory_doc = await inventories_col.find_one({"user_id": user_id})
     if not inventory_doc or not inventory_doc.get("items"):
-        await message.answer("🎒 Ваш инвентарь пуст.\\n\\nДелайте ставки или используйте /get_item, чтобы получить свой первый предмет! 🎰")
+        await message.answer("🎒 Ваш инвентарь пуст.\n\nДелайте ставки или используйте /get_item, чтобы получить свой первый предмет! 🎰")
         return
 
-    text = "🎒 Ваш инвентарь:\\n\\n"
+    text = "🎒 Ваш инвентарь:\n\n"
     item_counts = {item_key: inventory_doc["items"].count(item_key) for item_key in set(inventory_doc["items"])}
     
     buttons = []
     for item_key, count in sorted(item_counts.items()):
         item = ITEMS[item_key]
-        text += f"{item['name']} (x{count})\\nОписание: {item['description']}\\n\\n"
+        text += f"{item['name']} (x{count})\nОписание: {item['description']}\n\n"
         buttons.append([InlineKeyboardButton(text=f"Использовать {item['name']}", callback_data=f"use_item:{item_key}")])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -197,7 +177,7 @@ async def cmd_get_item(message: types.Message):
     
     updated_user_doc = await scores_col.find_one({"user_id": user_id})
     new_balance = updated_user_doc['balance']
-    await message.answer(f"Вы потратили {cost} фишек и получили: {ITEMS[item_key]['name']}!\\nВаш новый баланс: {new_balance} фишек. 🎰")
+    await message.answer(f"Вы потратили {cost} фишек и получили: {ITEMS[item_key]['name']}!\nВаш новый баланс: {new_balance} фишек. 🎰")
 
 async def use_item_logic(user: types.User, item_key: str, context_message: types.Message, original_message: types.Message = None):
     user_id = user.id
@@ -275,7 +255,7 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
         user_doc = await scores_col.find_one({"user_id": user_id})
         victim_doc = await scores_col.find_one({"user_id": victim_id})
 
-        await context_message.answer(f"🎲 Кубик Хаоса в действии!\\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\\nВаш баланс: {user_doc['balance']}\\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
+        await context_message.answer(f"🎲 Кубик Хаоса в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
 
     elif item_key == "madness_coin":
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
@@ -305,7 +285,7 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
             sign = "+" if change >= 0 else ""
             update_summary.append(f"{player_name}: {sign}{change}")
 
-        summary_message = "🌧️ Начался дождь из камней! 🌧️\\nФишки всех игроков изменились:\\n" + "\\n".join(update_summary)
+        summary_message = "🌧️ Начался дождь из камней! 🌧️\nФишки всех игроков изменились:\n" + "\n".join(update_summary)
         await context_message.answer(summary_message)
     
     elif item_key == "leaky_pocket":
@@ -337,8 +317,8 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
             top_player_new = await scores_col.find_one({"user_id": top_player_id})
 
             await context_message.answer(
-                f"🤏 Карма оказалась быстрой! Вас поймали за руку, и вы отдали {amount} фишек игроку {top_player_name} в качестве компенсации.\\n\\n"
-                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\\n"
+                f"🤏 Карма оказалась быстрой! Вас поймали за руку, и вы отдали {amount} фишек игроку {top_player_name} в качестве компенсации.\n\n"
+                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
                 f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
             )
         else:
@@ -354,8 +334,8 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
             top_player_new = await scores_col.find_one({"user_id": top_player_id})
 
             await context_message.answer(
-                f"🤏 Удачная вылазка! Вы использовали «Дырявый карман» и стащили {amount} фишек у хайроллера {top_player_name}!\\n\\n"
-                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\\n"
+                f"🤏 Удачная вылазка! Вы использовали «Дырявый карман» и стащили {amount} фишек у хайроллера {top_player_name}!\n\n"
+                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
                 f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
             )
 
@@ -401,7 +381,7 @@ async def handle_dice(message: types.Message):
         starter_item_doc = await inventories_col.find_one({"user_id": user_id})
         starter_item_key = starter_item_doc['items'][0]
         starter_item_name = ITEMS[starter_item_key]['name']
-        item_descriptions = "\\n".join([f"- {item['name']}: {item['description']}" for item in ITEMS.values()])
+        item_descriptions = "\n".join([f"- {item['name']}: {item['description']}" for item in ITEMS.values()])
         
         welcome_text = f'''😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
 
@@ -518,20 +498,20 @@ async def send_gambling_summary(chat_id):
     top_text = await get_leaderboard_text()
     
     if not clean:
-        await bot.send_message(chat_id, f"🎰 Ставки не делались, день прошел впустую.\\n\\n{top_text}")
+        await bot.send_message(chat_id, f"🎰 Ставки не делались, день прошел впустую.\n\n{top_text}")
         return
 
-    text_dump = "\\n".join([f"{m['name']}: {m['content']}" for m in clean])
+    text_dump = "\n".join([f"{m['name']}: {m['content']}" for m in clean])
     prompt = (f"{GAMBLING_SHOE_PROMPT} "
               "Подведи итоги прошедшего дня в чате, используя свою личность. "
               "Представь, что сообщения в чате — это ставки и события за игровым столом. "
               "Обязательно упомяни таблицу лидеров казино. "
               "ВАЖНО: Напиши 3-5 предложений, не больше и не меньше. "
-              f"Вот переписка:\\n{text_dump}\\n\\nА вот зал славы казино:\\n{top_text}"
+              f"Вот переписка:\n{text_dump}\n\nА вот зал славы казино:\n{top_text}"
              )
     
     res = await ask_model([{"role": "user", "content": prompt}], temp=1.0)
-    await bot.send_message(chat_id, f"💰 Итоги игрового дня:\\n{res} 🎰")
+    await bot.send_message(chat_id, f"💰 Итоги игрового дня:\n{res} 🎰")
 
 
 @dp.message()
@@ -559,23 +539,35 @@ async def handle_message(message: types.Message):
         processing_msg = await message.reply("😼 Нашел ссылку, пытаюсь стырить видео...")
         await bot.send_chat_action(cid, "upload_video")
         
-        video_path = await download_video(video_url)
+        video_info = await download_video_cobalt(video_url)
         
-        await bot.delete_message(chat_id=cid, message_id=processing_msg.message_id)
+        if processing_msg:
+             await bot.delete_message(chat_id=cid, message_id=processing_msg.message_id)
 
-        if video_path:
+        if video_info and video_info.get("url"):
+            v_url = video_info['url']
             try:
-                with open(video_path, 'rb') as video_file:
-                    input_file = BufferedInputFile(video_file.read(), filename=os.path.basename(video_path))
-                    await message.reply_video(input_file, caption="😼 Стырил")
-            except Exception as e:
-                print(f"Failed to send video file: {e}")
-                await message.reply("Не смог отправить видеофайл. Возможно, он слишком большой. 😼")
-            finally:
-                os.remove(video_path)
-        else:
-            await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(v_url, timeout=60) as r:
+                        if r.status == 200:
+                            content = await r.read()
+                            if len(content) < 50 * 1024 * 1024:
+                                await message.reply_video(
+                                    BufferedInputFile(content, filename="v.mp4"), 
+                                    caption="😼 Стырил"
+                                )
+                            else:
+                                await message.reply("Видео слишком большое, не могу отправить. 😼")
+                        else:
+                            await message.reply(f"Не удалось скачать видеопоток ({r.status}). 😼")
 
+            except asyncio.TimeoutError:
+                await message.reply("Не удалось скачать видео за 60 секунд. 😼")
+            except Exception as e:
+                print(f"Failed to download or send video from cobalt stream: {e}")
+                await message.reply("Ошибка при обработке видео. 😼")
+        else:
+            await message.reply("Не удалось обработать ссылку через Cobalt. Либо ссылка битая, либо сервис недоступен. 😼")
         return
 
     history.append({"role": "user", "name": message.from_user.first_name, "content": text})
@@ -647,8 +639,8 @@ async def execute_bot_spin():
     elif change > 0: result_text = f"выиграл {change} фишки."
     else: result_text = f"проиграл {abs(change)} фишек."
 
-    message_text = (f"🎲 Гемблинг Башмак делает свой ход! 🎲\\n\\n"
-                    f"Кот-крупье {result_text}\\n"
+    message_text = (f"🎲 Гемблинг Башмак делает свой ход! 🎲\n\n"
+                    f"Кот-крупье {result_text}\n"
                     f"Теперь его баланс: {new_balance} фишек. 😼")
 
     for cid in all_chat_ids:
@@ -689,8 +681,8 @@ async def execute_bot_item_use():
         await scores_col.update_one({"user_id": bot_id}, {"$inc": {"balance": 10}}, upsert=True)
         bot_doc = await scores_col.find_one({"user_id": bot_id})
         new_balance = bot_doc.get("balance", "N/A")
-        announcement = (f"😼 Гемблинг Башмак использовал предмет! 😼\\n\\n"
-                        f"Кот нашел {item_info['name']} и получил 10 фишек.\\n"
+        announcement = (f"😼 Гемблинг Башмак использовал предмет! 😼\n\n"
+                        f"Кот нашел {item_info['name']} и получил 10 фишек.\n"
                         f"Его баланс теперь: {new_balance} фишек. 🎰")
 
     elif item_key_to_use == "stone_rain":
@@ -699,7 +691,7 @@ async def execute_bot_item_use():
         
         update_summary = []
         if not all_players:
-            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\\n\\n"
+            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
                             f"Но в казино пусто, и камни упали в тишине. Эффекта нет.")
         else:
             for player in all_players:
@@ -712,17 +704,17 @@ async def execute_bot_item_use():
                 sign = "+" if change >= 0 else ""
                 update_summary.append(f"{player_name}: {sign}{change}")
             
-            summary_str = "\\n".join(update_summary)
-            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\\n\\n"
-                            f"{item_info['description']}\\n\\n"
-                            f"Результаты:\\n{summary_str}")
+            summary_str = "\n".join(update_summary)
+            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
+                            f"{item_info['description']}\n\n"
+                            f"Результаты:\n{summary_str}")
 
     elif item_key_to_use == "chaos_cube":
         other_players_cursor = scores_col.find({"user_id": {"$ne": bot_id}}, {"user_id": 1, "name": 1})
         other_players = await other_players_cursor.to_list(length=None)
         
         if not other_players:
-            announcement = (f"😼 Гемблинг Башмак попытался использовать {item_info['name']}... 😼\\n\\n"
+            announcement = (f"😼 Гемблинг Башмак попытался использовать {item_info['name']}... 😼\n\n"
                             f"Но в казино, кроме него, ни души. Кубик укатился в угол, не причинив вреда.")
         else:
             victim = random.choice(other_players)
@@ -736,9 +728,9 @@ async def execute_bot_item_use():
             bot_doc = await scores_col.find_one({"user_id": bot_id})
             victim_doc = await scores_col.find_one({"user_id": victim_id})
 
-            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\\n\\n"
-                            f"Под раздачу попал {victim_name}! Башмак крадет у него {roll} фишек.\\n"
-                            f"Баланс Башмака: {bot_doc.get('balance', 'N/A')}\\n"
+            announcement = (f"😼 Гемблинг Башмак использовал {item_info['name']}! 😼\n\n"
+                            f"Под раздачу попал {victim_name}! Башмак крадет у него {roll} фишек.\n"
+                            f"Баланс Башмака: {bot_doc.get('balance', 'N/A')}\n"
                             f"Баланс {victim_name}: {victim_doc.get('balance', 'N/A')}")
 
     if announcement:
@@ -771,8 +763,8 @@ async def distribute_daily_items_and_announce():
         return
 
     message_text = (
-        f"🎁 Ежедневный бонус! 🎁\\n\\n"
-        f"В конце дня каждый игрок получает по одному случайному предмету!\\n\\n"
+        f"🎁 Ежедневный бонус! 🎁\n\n"
+        f"В конце дня каждый игрок получает по одному случайному предмету!\n\n"
         f"Проверьте свой /inventory, чтобы узнать, что вам досталось! 🎰"
     )
 
