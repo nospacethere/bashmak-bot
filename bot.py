@@ -32,6 +32,7 @@ scores_col = db['scores']
 inventories_col = db['inventories']
 spin_counts_col = db['spin_counts']
 game_state_col = db['game_state']
+amulets_col = db['amulets'] # Новая коллекция для амулетов
 
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
@@ -42,7 +43,8 @@ ITEMS = {
     "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False},
     "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False},
     "generous_jackpot": {"name": "🎉 Щедрый Джекпот", "description": "Вы получаете +10 фишек, а все остальные игроки — от 1 до 5 фишек.", "requires_target": False},
-    "double_down": {"name": "⏫ Двойная Ставка", "description": "Активируйте перед спином, чтобы удвоить и выигрыш, и проигрыш.", "requires_target": False}
+    "double_down": {"name": "⏫ Двойная Ставка", "description": "Активируйте перед спином, чтобы удвоить и выигрыш, и проигрыш.", "requires_target": False},
+    "vampiric_amulet": {"name": "🩸 Вампирский Амулет", "description": "Вешается на случайного игрока. 24 часа вы получаете 50% от его выигрышей.", "requires_target": False}
 }
 
 user_history = {}
@@ -131,7 +133,8 @@ async def cmd_admin_wipe(message: types.Message):
     await inventories_col.drop()
     await spin_counts_col.drop()
     await game_state_col.drop()
-    await message.answer("💥 Казино сожжено дотла! 💥\nВсе ставки, инвентари, счетчики спинов и состояние игры обнулены.")
+    await amulets_col.drop() # Очистка амулетов
+    await message.answer("💥 Казино сожжено дотла! 💥\nВсе ставки, инвентари, счетчики спинов, амулеты и состояние игры обнулены.")
     bot_user = await bot.get_me()
     await scores_col.update_one({"user_id": bot_user.id}, {"$set": {"name": "Гемблинг Башмак", "balance": 100}}, upsert=True)
     await message.answer("Крупье тоже в игре. Гемблинг Башмак ставит на кон свои 100 фишек. 😼")
@@ -215,7 +218,7 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
 
     item = ITEMS[item_key]
 
-    if item["requires_target"]:
+    if item.get("requires_target"):
         if not original_message or not original_message.reply_to_message:
             await context_message.answer(f"Чтобы использовать {item['name']}, ответьте на сообщение цели.")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
@@ -239,6 +242,26 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
         await scores_col.update_one({"user_id": target_id}, {"$setOnInsert": {"name": target_name, "balance": 100}}, upsert=True)
 
         await context_message.answer(f"{user_name} использовал {item['name']} на игрока {target_name}! 😈")
+        return
+
+    if item_key == "vampiric_amulet":
+        bot_user = await bot.get_me()
+        other_players_cursor = scores_col.find({"user_id": {"$nin": [user_id, bot_user.id]}}, {"user_id": 1, "name": 1})
+        other_players = await other_players_cursor.to_list(length=None)
+
+        if not other_players:
+            await context_message.answer("🩸 В казино больше нет игроков, чтобы выпить их кровь... то есть, фишки. 🧛")
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}}) # Вернуть предмет
+            return
+
+        victim = random.choice(other_players)
+        victim_id = victim['user_id']
+        victim_name = victim['name']
+        
+        expires_at = datetime.datetime.now(pytz.utc) + datetime.timedelta(hours=24)
+        await amulets_col.insert_one({"owner_id": user_id, "victim_id": victim_id, "expires_at": expires_at})
+        
+        await context_message.answer(f"🩸 Вы повесили Вампирский Амулет на игрока {victim_name}! Следующие 24 часа вы будете получать 50% от всех его выигрышей. 🧛")
         return
 
     if item_key == "money_pouch":
@@ -278,6 +301,10 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
         await context_message.answer("🌓 Вы использовали Монету Безумия! Ваш следующий спин определит судьбу. Удачи... или нет. 😈")
     
+    elif item_key == "double_down":
+        await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "double_down"}}, upsert=True)
+        await context_message.answer("⏫ Вы использовали Двойную Ставку! Ваш следующий спин будет стоить вдвое дороже... или принесет вдвое больше. Риск — благородное дело! 🎰")
+
     elif item_key == "stone_rain":
         all_players_cursor = scores_col.find({}, {"user_id": 1, "name": 1})
         all_players = await all_players_cursor.to_list(length=None)
@@ -383,6 +410,7 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
         summary_message = "🎉 Вы использовали Щедрый Джекпот! 🎉\n\n" + "\n".join(update_summary)
         await context_message.answer(summary_message)
 
+
 @dp.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
     if command.args is None:
@@ -406,7 +434,6 @@ async def handle_dice(message: types.Message):
     if not user_doc:
         is_new_user = True
         start_balance = 100
-        # Give a random item to the new user
         starter_item_key = random.choice(list(ITEMS.keys()))
         await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": starter_item_key}}, upsert=True)
 
@@ -482,27 +509,23 @@ async def handle_dice(message: types.Message):
     
     active_effects = user_doc.get('active_effects', [])
     effects_to_remove = []
-    effect_message = None
+    effect_messages = []
 
     if "double_down" in active_effects:
         final_change *= 2
-        effect_message = f"⏫ Двойная Ставка удваивает результат! "
+        effect_messages.append(f"⏫ Двойная Ставка удваивает результат!")
         effects_to_remove.append("double_down")
 
     if "madness_coin" in active_effects:
         is_shield = random.random() < 0.5
         original_change = final_change
         
-        if is_shield:
-            # SHIELD: Nullify loss
-            if final_change < 0:
-                final_change = 0
-            effect_message = (effect_message or "") + f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен. "
-        else:
-            # VOID: Nullify win
-            if final_change > 0:
-                final_change = 0
-            effect_message = (effect_message or "") + f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен. "
+        if is_shield and final_change < 0:
+            final_change = 0
+            effect_messages.append(f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен.")
+        elif not is_shield and final_change > 0:
+            final_change = 0
+            effect_messages.append(f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен.")
             
         effects_to_remove.append("madness_coin")
         
@@ -513,8 +536,30 @@ async def handle_dice(message: types.Message):
     
     new_balance = current_balance + final_change
 
-    if effect_message:
-        await message.reply(f"{cost_msg}{effect_message}Итог: {final_change}. Баланс: {new_balance} 🎰")
+    # Логика Вампирского Амулета
+    if change > 0:
+        amulet = await amulets_col.find_one({"victim_id": user_id, "expires_at": {"$gt": datetime.datetime.now(pytz.utc)}})
+        if amulet:
+            owner_id = amulet['owner_id']
+            stolen_amount = int(change * 0.5) # 50% от первоначального выигрыша
+            
+            await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -stolen_amount}})
+            await scores_col.update_one({"user_id": owner_id}, {"$inc": {"balance": stolen_amount}}, upsert=True)
+            
+            new_balance -= stolen_amount
+            owner_doc = await scores_col.find_one({"user_id": owner_id})
+            owner_name = owner_doc.get('name', 'Таинственный вампир')
+            
+            effect_messages.append(f"🩸 Вампирский Амулет игрока {owner_name} сработал! Он забирает у вас {stolen_amount} фишек.")
+            try:
+                await bot.send_message(owner_id, f"🩸 Ваш Вампирский Амулет на игроке {user_name} принес вам {stolen_amount} фишек!")
+            except Exception as e:
+                print(f"Failed to notify amulet owner {owner_id}: {e}")
+
+    full_effect_message = " ".join(effect_messages)
+
+    if full_effect_message:
+        await message.reply(f"{cost_msg}{full_effect_message} Итог: {final_change}. Баланс: {new_balance} 🎰")
     else:
         if change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
         elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
@@ -590,7 +635,6 @@ async def handle_message(message: types.Message):
     history = get_history(cid)
     text = message.text
     
-    # Ищем первую попавшуюся ссылку в сообщении
     url_pattern = r'https?://[^\s]+'
     found_urls = re.findall(url_pattern, text)
     url_to_download = None
@@ -603,7 +647,6 @@ async def handle_message(message: types.Message):
 
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
-        # Не преобразуем URL, передаем как есть
         video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
@@ -631,7 +674,7 @@ async def handle_message(message: types.Message):
                  await message.reply("Произошла ошибка при отправке видео. 😼")
         else:
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
-        return # Stop processing after attempting to download
+        return
 
     history.append({"role": "user", "name": message.from_user.first_name, "content": text})
     try: 
@@ -721,7 +764,7 @@ async def execute_bot_spin():
     await scores_col.update_one({'user_id': bot_id}, update_query)
     await spin_counts_col.update_one({'user_id': bot_id}, {'$inc': {'count': 1}}, upsert=True)
     
-    bot_doc_after = await scores_col.find_one({"user_id": bot_id})
+    bot_doc_after = await scores_col.find_one({'user_id': bot_id})
     new_balance = bot_doc_after.get("balance", "N/A")
 
     if effect_message:
@@ -887,6 +930,12 @@ async def distribute_daily_items_and_announce():
             print(f"Failed to send daily item bonus announcement to chat {cid}: {e}")
 
 # --- ПЛАНИРОВЩИК ---
+async def cleanup_expired_amulets():
+    now = datetime.datetime.now(pytz.utc)
+    result = await amulets_col.delete_many({"expires_at": {"$lt": now}})
+    if result.deleted_count > 0:
+        print(f"[{datetime.datetime.now()}] Cleaned up {result.deleted_count} expired vampiric amulets.")
+
 async def reset_daily_state():
     await spin_counts_col.delete_many({})
     schedule_bot_spins()
@@ -900,6 +949,7 @@ async def end_game(chat_id):
     await inventories_col.drop()
     await spin_counts_col.drop()
     await game_state_col.drop()
+    await amulets_col.drop()
 
 async def scheduler():
     while True:
@@ -922,6 +972,9 @@ async def scheduler():
                 user_history[cid].clear()
             await asyncio.sleep(61)
         
+        if now.minute % 30 == 0: # Проверка и очистка амулетов каждые 30 минут
+            await cleanup_expired_amulets()
+
         if now.hour == 12 and now.minute == 0:
             print(f"[{datetime.datetime.now()}] Triggering bot item use.")
             await execute_bot_item_use()
