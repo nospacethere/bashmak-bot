@@ -35,8 +35,7 @@ spin_counts_col = db['spin_counts']
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
     "chaos_cube": {"name": "🎲 Кубик Хаоса", "description": "Вычитает случайное число (1-6) у случайного игрока и добавляет вам.", "requires_target": False},
-    "black_mark": {"name": "💀 Чёрная метка", "description": "Удваивает следующий выигрыш или проигрыш цели.", "requires_target": True},
-    "madness_coin": {"name": "🌓 Монета Безумия", "description": "50/50 шанс удвоить выигрыш цели или превратить его в убыток.", "requires_target": True},
+    "madness_coin": {"name": "🌓 Монета Безумия", "description": "50/50 шанс удвоить ваш следующий выигрыш или превратить его в убыток.", "requires_target": False},
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
     "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам.", "requires_target": False}
 }
@@ -58,11 +57,11 @@ def calculate_win(dice_value):
     reels = [v % 4, (v // 4) % 4, v // 16]
     is_bar = lambda r: r == 1
     
-    if dice_value == 64: return 80
-    elif all(is_bar(r) for r in reels): return 40
-    elif reels[0] == reels[1] == reels[2]: return 15
-    elif reels[0] == reels[1] or reels[1] == reels[2]: return 3
-    else: return -2
+    if dice_value == 64: return 50
+    elif all(is_bar(r) for r in reels): return 20
+    elif reels[0] == reels[1] == reels[2]: return 10
+    elif reels[0] == reels[1] or reels[1] == reels[2]: return -1
+    else: return -5
 
 # --- ПОМОЩНИКИ ---
 async def download_video_rapid(url):
@@ -192,20 +191,15 @@ async def cmd_use(message: types.Message, command: CommandObject):
         await message.reply("У вас нет такого предмета. 😕")
         return
 
-    # --- REMOVE ONE ITEM FROM INVENTORY ---
-    # This is a bit tricky in MongoDB, so we do it manually.
-    # We fetch, remove one instance, and then update.
     current_items = inventory_doc.get("items", [])
     current_items.remove(item_key)
     await inventories_col.update_one({"user_id": user_id}, {"$set": {"items": current_items}})
 
     item = ITEMS[item_key]
 
-    # --- HANDLE TARGETED ITEMS ---
     if item["requires_target"]:
         if not message.reply_to_message:
             await message.reply(f"Чтобы использовать **{item['name']}**, ответьте на сообщение цели.")
-            # Return the item if the action failed
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         target_user = message.reply_to_message.from_user
@@ -229,7 +223,6 @@ async def cmd_use(message: types.Message, command: CommandObject):
         await message.answer(f"{user_name} использовал **{item['name']}** на игрока {target_name}! 😈")
         return
 
-    # --- HANDLE NON-TARGETED ITEMS ---
     if item_key == "money_pouch":
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
@@ -247,7 +240,6 @@ async def cmd_use(message: types.Message, command: CommandObject):
         
         if not all_players:
             await message.reply("В казино больше нет игроков, чтобы стать жертвой хаоса. 🎲")
-            # Return the item if no victims
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         
@@ -263,6 +255,10 @@ async def cmd_use(message: types.Message, command: CommandObject):
         victim_doc = await scores_col.find_one({"user_id": victim_id})
 
         await message.answer(f"🎲 **Кубик Хаоса** в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
+
+    elif item_key == "madness_coin":
+        await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
+        await message.reply("🌓 Вы использовали **Монету Безумия**! Ваш следующий спин определит судьбу. Удачи... или нет. 😈")
 
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
@@ -284,23 +280,13 @@ async def handle_dice(message: types.Message):
     spin_count = spin_count_doc.get('count', 0) if spin_count_doc else 0
     current_spin_number = spin_count + 1
 
-    if current_spin_number > 5:
+    if current_spin_number > 2:
         await message.reply("На сегодня твои попытки в казино закончились! Возвращайся завтра. 🎰")
         return
 
-    costs = {3: 5, 4: 12, 5: 20}
-    entry_cost = costs.get(current_spin_number, 0)
     current_balance = user_doc.get('balance', 0)
 
-    if current_balance < entry_cost:
-        await message.reply(f"Недостаточно фишек для {current_spin_number}-го спина! Нужно {entry_cost}, а у тебя {current_balance}. 😕")
-        return
-        
-    if entry_cost > 0:
-        await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': -entry_cost}})
-        current_balance -= entry_cost
-
-    if is_new_user and current_spin_number == 1:
+    if is_new_user:
         item_descriptions = "\n".join([f"- **{item['name']}**: _{item['description']}_" for item in ITEMS.values()])
         
         welcome_text = f'''😼 **Добро пожаловать в подпольное казино «Гемблинг Башмак»!**
@@ -313,22 +299,17 @@ async def handle_dice(message: types.Message):
 
 **🎲 ПРАВИЛА СПИНОВ**
 
-У тебя есть **5 попыток в день**. Каждая ставка может изменить всё.
-
-- **Спины 1-2:** Бесплатно. Разогрев для новичков.
-- **Спин 3:** -5 фишек. Игра начинается.
-- **Спин 4:** -12 фишек. Ставки растут.
-- **Спин 5:** **ТЁМНОЕ КАЗИНО** (-20 фишек). Здесь обычные правила не действуют. Высокий риск, но и награда может быть невероятной: от крупной суммы фишек до редких предметов... или полного провала.
+У тебя есть **2 бесплатные попытки в день**. Каждая ставка может изменить всё. Используй их с умом!
 
 ---
 
 **🏆 ТАБЛИЦА ВЫИГРЫШЕЙ**
 
-- **7️⃣-7️⃣-7️⃣ (Джекпот):** +80 фишек
-- **BAR-BAR-BAR:** +40 фишек
-- **Три одинаковых символа:** +15 фишек
-- **Два одинаковых символа:** +3 фишки
-- **Проигрыш:** -2 фишки
+- **7️⃣-7️⃣-7️⃣ (Джекпот):** +50 фишек
+- **BAR-BAR-BAR:** +20 фишек
+- **Три одинаковых символа:** +10 фишек
+- **Два одинаковых символа:** -1 фишка
+- **Проигрыш:** -5 фишек
 
 ---
 
@@ -350,41 +331,13 @@ async def handle_dice(message: types.Message):
 
     await spin_counts_col.update_one({'user_id': user_id},{'$inc': {'count': 1}},upsert=True)
 
-    if current_spin_number == 5:
-        await message.answer(f"За вход в **ТЁМНОЕ КАЗИНО** списано {entry_cost} фишек... 😈")
-        await asyncio.sleep(1)
-
-        outcome = random.choice(['nothing', 'chips', 'items'])
-
-        if outcome == 'nothing':
-            await message.reply(f"💨 **ПУСТОТА!** 💨\nТьма поглотила твою ставку. Ты не получаешь ничего.\nТвой баланс: {current_balance} фишек. 🎰")
-
-        elif outcome == 'chips':
-            await scores_col.update_one({'user_id': user_id}, {'$inc': {'balance': 50}})
-            new_balance = current_balance + 50
-            await message.reply(f"🎉 **УСПЕХ!** 🎉\nТы обыграл тьму и получаешь **+50 фишек**! Твой новый баланс: {new_balance}. ✨")
-
-        elif outcome == 'items':
-            items_to_give = [random.choice(list(ITEMS.keys())) for _ in range(3)]
-            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": {"$each": items_to_give}}}, upsert=True)
-            
-            item_names = [ITEMS[key]['name'] for key in items_to_give]
-            items_text = "\n".join(f"- **{name}**" for name in item_names)
-            
-            await message.reply(f"🎉 **ДЖЕКПОТ!** 🎉\nТьма дарует тебе сокровища! Ты получил 3 предмета:\n{items_text}\n\nЗагляни в /inventory! 🎁")
-        return
-
-    cost_msg = f"(Спин {current_spin_number}/5) "
-    if entry_cost > 0: cost_msg += f"(-{entry_cost} фишек) "
+    cost_msg = f"(Спин {current_spin_number}/2) "
 
     change = calculate_win(message.dice.value)
     final_change = change
     
     active_effects = user_doc.get('active_effects', [])
     effects_to_remove = []
-    if "black_mark" in active_effects:
-        final_change *= 2
-        effects_to_remove.append("black_mark")
     if "madness_coin" in active_effects:
         if random.random() < 0.5: final_change *= 2
         else: final_change *= -2
@@ -400,7 +353,7 @@ async def handle_dice(message: types.Message):
     if effects_to_remove:
         await message.reply(f"{cost_msg}На вас сработал эффект! {change} -> **{final_change}**! Баланс: {new_balance} 🎰")
     else:
-        if change >= 15: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
+        if change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
         elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
         else: await message.reply(f"{cost_msg}Мимо. {change}. Баланс: {new_balance} 🎰")
 
@@ -409,14 +362,12 @@ async def handle_football(message: types.Message):
     user_id = message.from_user.id
     user_doc = await scores_col.find_one({"user_id": user_id})
 
-    # Check if the user has the active effect for the Golden Boot
     if not user_doc or "golden_boot_active" not in user_doc.get("active_effects", []):
-        return  # Ignore the roll if the item was not used
+        return
 
     dice_value = message.dice.value
-    change = 50 if dice_value >= 4 else -25
+    change = 10 if dice_value >= 4 else -10
 
-    # Atomically update balance and remove the effect
     await scores_col.update_one(
         {"user_id": user_id},
         {
@@ -468,9 +419,9 @@ async def send_gambling_summary(chat_id):
     res = await ask_model([{"role": "user", "content": prompt}], temp=1.0)
     await bot.send_message(chat_id, f"💰 **ИТОГИ ИГРОВОГО ДНЯ:**\n{res} 🎰")
 
+
 @dp.message()
 async def handle_message(message: types.Message):
-    # Ignore commands, bots, and dice messages in this handler
     if message.from_user.is_bot or not message.text or message.text.startswith('/') or (message.dice and message.dice.emoji in ['🎰', '⚽']):
         return
     cid = message.chat.id
@@ -510,21 +461,125 @@ async def handle_message(message: types.Message):
         reply += f" {selected_role['emoji']}"
     await message.reply(reply)
 
+# --- АВТО-СПИНЫ БОТА ---
+
+bot_spin_time_1 = None
+bot_spin_time_2 = None
+
+def schedule_bot_spins():
+    global bot_spin_time_1, bot_spin_time_2
+    hour1 = random.randint(9, 12)
+    minute1 = random.randint(0, 59)
+    bot_spin_time_1 = datetime.time(hour1, minute1)
+
+    hour2 = random.randint(18, 21)
+    minute2 = random.randint(0, 59)
+    bot_spin_time_2 = datetime.time(hour2, minute2)
+
+    print(f"[{datetime.datetime.now()}] Bot spins scheduled for {bot_spin_time_1.strftime('%H:%M')} and {bot_spin_time_2.strftime('%H:%M')} MSK")
+
+async def execute_bot_spin():
+    bot_user = await bot.get_me()
+    
+    spin_count_doc = await spin_counts_col.find_one({'user_id': bot_user.id})
+    spin_count = spin_count_doc.get('count', 0) if spin_count_doc else 0
+    if spin_count >= 2:
+        print(f"[{datetime.datetime.now()}] Bot has already spun twice today.")
+        return
+
+    all_chat_ids = list(user_history.keys())
+    if not all_chat_ids:
+        print(f"[{datetime.datetime.now()}] No active chats for bot spin.")
+        return
+
+    dice_value = random.randint(1, 64)
+    change = calculate_win(dice_value)
+
+    await scores_col.update_one({"user_id": bot_user.id}, {"$inc": {"balance": change}}, upsert=True)
+    await spin_counts_col.update_one({'user_id': bot_user.id}, {'$inc': {'count': 1}}, upsert=True)
+    
+    bot_doc = await scores_col.find_one({"user_id": bot_user.id})
+    new_balance = bot_doc.get("balance", "N/A")
+
+    result_text = ""
+    if change >= 10: result_text = f"сорвал крупный куш в `{change}` фишек!"
+    elif change > 0: result_text = f"выиграл `{change}` фишки."
+    else: result_text = f"проиграл `{abs(change)}` фишек."
+
+    message_text = (f"🎲 **Гемблинг Башмак делает свой ход!** 🎲\n\n"
+                    f"Кот-крупье {result_text}\n"
+                    f"Теперь его баланс: **{new_balance}** фишек. 😼")
+
+    for cid in all_chat_ids:
+        try:
+            await bot.send_message(cid, message_text)
+            await asyncio.sleep(0.2)
+        except Exception as e:
+            print(f"Failed to send bot spin to chat {cid}: {e}")
+
+async def distribute_daily_items_and_announce():
+    all_players_cursor = scores_col.find({}, {"user_id": 1})
+    all_players = await all_players_cursor.to_list(length=None)
+    if not all_players:
+        print(f"[{datetime.datetime.now()}] No players to distribute daily items to.")
+        return
+
+    for player in all_players:
+        item_key = random.choice(list(ITEMS.keys()))
+        await inventories_col.update_one(
+            {"user_id": player['user_id']},
+            {"$push": {"items": item_key}},
+            upsert=True
+        )
+
+    all_chat_ids = list(user_history.keys())
+    if not all_chat_ids:
+        return
+
+    message_text = (
+        f"🎁 **ЕЖЕДНЕВНЫЙ БОНУС!** 🎁\n\n"
+        f"В конце дня каждый игрок получает по одному случайному предмету!\n\n"
+        f"Проверьте свой /inventory, чтобы узнать, что вам досталось! 🎰"
+    )
+
+    for cid in all_chat_ids:
+        try:
+            await bot.send_message(cid, message_text)
+            await asyncio.sleep(0.2)
+        except Exception as e:
+            print(f"Failed to send daily item bonus announcement to chat {cid}: {e}")
+
 # --- ПЛАНИРОВЩИК ---
 async def reset_daily_state():
     await spin_counts_col.delete_many({})
+    schedule_bot_spins()
     print(f"[{datetime.datetime.now()}] Daily spin counts have been reset.")
 
 async def scheduler():
     while True:
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+
         if now.hour == 0 and now.minute == 0:
             await reset_daily_state()
             for cid in user_history:
                 user_history[cid].clear()
             await asyncio.sleep(61)
+        
+        global bot_spin_time_1, bot_spin_time_2
+        if bot_spin_time_1 and now.hour == bot_spin_time_1.hour and now.minute == bot_spin_time_1.minute:
+            print(f"[{datetime.datetime.now()}] Triggering bot spin 1.")
+            await execute_bot_spin()
+            bot_spin_time_1 = None
+            await asyncio.sleep(61)
+
+        if bot_spin_time_2 and now.hour == bot_spin_time_2.hour and now.minute == bot_spin_time_2.minute:
+            print(f"[{datetime.datetime.now()}] Triggering bot spin 2.")
+            await execute_bot_spin()
+            bot_spin_time_2 = None
+            await asyncio.sleep(61)
 
         if now.hour == 22 and now.minute == 0:
+            await distribute_daily_items_and_announce()
             all_chat_ids = list(user_history.keys())
             for cid in all_chat_ids:
                 await send_gambling_summary(cid)
@@ -539,11 +594,11 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
     await site.start()
     
+    schedule_bot_spins()
     asyncio.create_task(scheduler())
     await bot.delete_webhook(drop_pending_updates=True)
     
     me = await bot.get_me()
-    # Set bot username for later use, e.g. in message handlers
     bot.username = me.username
 
     main_commands = [
