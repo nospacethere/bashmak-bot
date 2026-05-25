@@ -1,5 +1,5 @@
 
-import os, asyncio, datetime, pytz, random
+import os, asyncio, datetime, pytz, random, re
 from collections import deque
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandObject
@@ -526,10 +526,26 @@ async def handle_message(message: types.Message):
         return
     cid = message.chat.id
     history = get_history(cid)
+    text = message.text
     
-    if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts", "youtu.be/"]):
+    url_to_download = text
+    is_video_link = False
+
+    # Convert YouTube Shorts and mobile links to standard watch links
+    if "youtube.com/shorts/" in text:
+        is_video_link = True
+        video_id = text.split("shorts/")[1].split("?")[0].split("&")[0]
+        url_to_download = f"https://www.youtube.com/watch?v={video_id}"
+    elif "youtu.be/" in text:
+        is_video_link = True
+        video_id = text.split("youtu.be/")[1].split("?")[0].split("&")[0]
+        url_to_download = f"https://www.youtube.com/watch?v={video_id}"
+    elif "instagram.com/" in text or "tiktok.com/" in text:
+        is_video_link = True
+
+    if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
-        video_info = await download_video_rapid(message.text)
+        video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
             width = video_info['width']
@@ -546,13 +562,13 @@ async def handle_message(message: types.Message):
                         )
         return # Stop processing after attempting to download
 
-    history.append({"role": "user", "name": message.from_user.first_name, "content": message.text})
+    history.append({"role": "user", "name": message.from_user.first_name, "content": text})
     try: 
         await scores_col.update_one({"user_id": message.from_user.id}, {"$set": {"name": message.from_user.first_name}}, upsert=False)
     except: pass
 
     bot_obj = await bot.get_me()
-    is_named = bot_obj.username.lower() in message.text.lower()
+    is_named = bot_obj.username.lower() in text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_obj.id
     
     if not (message.chat.type == ChatType.PRIVATE or is_named or is_reply or random.random() < 0.05): return
