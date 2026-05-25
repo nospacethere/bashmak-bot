@@ -72,15 +72,31 @@ async def download_video_rapid(url):
     headers = {"Content-Type": "application/json", "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com", "x-rapidapi-key": RAPID_KEY}
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(api_url, json={"url": url}, headers=headers, timeout=20) as resp:
+            async with session.post(api_url, json={"url": url}, headers=headers, timeout=30) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     medias = data.get('medias', [])
+                    best_video = None
+                    max_pixels = 0
                     if medias:
                         for m in medias:
-                            if m.get('extension') == 'mp4': return m.get('url')
-                        return medias[0].get('url')
-        except: pass
+                            if m.get('extension') == 'mp4' and m.get('quality'):
+                                try:
+                                    width = m.get('width', 0)
+                                    height = m.get('height', 0)
+                                    pixels = width * height
+                                    if pixels > max_pixels:
+                                        max_pixels = pixels
+                                        best_video = {"url": m['url'], "width": width, "height": height}
+                                except (KeyError, TypeError):
+                                    continue
+                        if not best_video and medias:
+                            first_url = medias[0].get('url')
+                            if first_url:
+                                return {"url": first_url, "width": None, "height": None}
+                    return best_video
+        except Exception as e:
+            print(f"Video download error: {e}")
     return None
 
 async def ask_model(messages, temp=0.8):
@@ -513,13 +529,22 @@ async def handle_message(message: types.Message):
     
     if any(x in message.text for x in ["instagram.com/", "tiktok.com/", "youtube.com/shorts", "youtu.be/"]):
         await bot.send_chat_action(cid, "upload_video")
-        v_url = await download_video_rapid(message.text)
-        if v_url:
+        video_info = await download_video_rapid(message.text)
+        if video_info:
+            v_url = video_info['url']
+            width = video_info['width']
+            height = video_info['height']
+            
             async with aiohttp.ClientSession() as s:
                 async with s.get(v_url) as r:
                     if r.status == 200:
-                        await message.reply_video(BufferedInputFile(await r.read(), filename="v.mp4"), caption="😼 Стырил")
-                        return
+                        await message.reply_video(
+                            BufferedInputFile(await r.read(), filename="v.mp4"), 
+                            caption="😼 Стырил",
+                            width=width, 
+                            height=height
+                        )
+        return # Stop processing after attempting to download
 
     history.append({"role": "user", "name": message.from_user.first_name, "content": message.text})
     try: 
