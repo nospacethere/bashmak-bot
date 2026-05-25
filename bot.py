@@ -36,9 +36,9 @@ game_state_col = db['game_state']
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
     "chaos_cube": {"name": "🎲 Кубик Хаоса", "description": "Вычитает случайное число (1-6) у случайного игрока и добавляет вам.", "requires_target": False},
-    "madness_coin": {"name": "🌓 Монета Безумия", "description": "50/50 шанс удвоить ваш следующий выигрыш или превратить его в убыток.", "requires_target": False},
+    "madness_coin": {"name": "🌓 Монета Безумия", "description": "Применяет к следующему спину один из двух эффектов (50/50): либо отменяет проигрыш, либо отменяет выигрыш.", "requires_target": False},
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
-    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам.", "requires_target": False},
+    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам. За гол вы получаете +10 фишек, за промах -10.", "requires_target": False},
     "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False},
     "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False}
 }
@@ -242,7 +242,7 @@ async def use_item_logic(user: types.User, item_key: str, context_message: types
     if item_key == "money_pouch":
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
-        new_balance = user_doc.get("balance", 10)
+        new_balance = user_doc.get('balance', 10)
         await context_message.answer(f"💰 Вы использовали Мешочек мелочи и получили +10 фишек! Ваш баланс: {new_balance}")
 
     elif item_key == "golden_boot":
@@ -453,9 +453,23 @@ async def handle_dice(message: types.Message):
     
     active_effects = user_doc.get('active_effects', [])
     effects_to_remove = []
+    effect_message = None
+
     if "madness_coin" in active_effects:
-        if random.random() < 0.5: final_change *= 2
-        else: final_change *= -2
+        is_shield = random.random() < 0.5
+        original_change = final_change
+        
+        if is_shield:
+            # SHIELD: Nullify loss
+            if final_change < 0:
+                final_change = 0
+            effect_message = f"Сработал ЩИТ Монеты Безумия! Проигрыш {original_change} отменен. "
+        else:
+            # VOID: Nullify win
+            if final_change > 0:
+                final_change = 0
+            effect_message = f"Сработала ПУСТОТА Монеты Безумия! Выигрыш {original_change} отменен. "
+            
         effects_to_remove.append("madness_coin")
         
     update_query = {"$inc": {"balance": final_change}}
@@ -465,8 +479,8 @@ async def handle_dice(message: types.Message):
     
     new_balance = current_balance + final_change
 
-    if effects_to_remove:
-        await message.reply(f"{cost_msg}На вас сработал эффект! {change} -> {final_change}! Баланс: {new_balance} 🎰")
+    if effect_message:
+        await message.reply(f"{cost_msg}{effect_message}Баланс: {new_balance} 🎰")
     else:
         if change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{change}. Баланс: {new_balance} 🎰")
         elif change > 0: await message.reply(f"{cost_msg}Держи +{change}. Баланс: {new_balance} 🎰")
