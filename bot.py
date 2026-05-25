@@ -38,7 +38,8 @@ ITEMS = {
     "madness_coin": {"name": "🌓 Монета Безумия", "description": "50/50 шанс удвоить ваш следующий выигрыш или превратить его в убыток.", "requires_target": False},
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
     "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам.", "requires_target": False},
-    "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False}
+    "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False},
+    "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False}
 }
 
 user_history = {}
@@ -287,6 +288,57 @@ async def cmd_use(message: types.Message, command: CommandObject):
 
         summary_message = "🌧️ Начался дождь из камней! 🌧️\nФишки всех игроков изменились:\n" + "\n".join(update_summary)
         await message.answer(summary_message)
+    
+    elif item_key == "leaky_pocket":
+        all_players_sorted = await scores_col.find({}).sort("balance", -1).to_list(length=2)
+
+        if not all_players_sorted or (len(all_players_sorted) == 1 and all_players_sorted[0]['user_id'] == user_id):
+            await message.reply("В казино больше некого обчищать. Вы единственный игрок. 🤏")
+            await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
+            return
+
+        top_player = all_players_sorted[0]
+        if top_player['user_id'] == user_id:
+            top_player = all_players_sorted[1]
+        
+        top_player_id = top_player['user_id']
+        top_player_name = top_player.get('name', 'Anon')
+        user_doc = await scores_col.find_one({"user_id": user_id})
+
+        if random.random() < 0.3:
+            amount = int(user_doc.get('balance', 0) * 0.15)
+            if amount <= 0:
+                await message.answer(f"Вы попытались обокрасть {top_player_name}, но вас поймали! К счастью, у вас и красть нечего. Вы ничего не потеряли. 💨")
+                return
+
+            await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -amount}})
+            await scores_col.update_one({"user_id": top_player_id}, {"$inc": {"balance": amount}})
+            
+            user_doc_new = await scores_col.find_one({"user_id": user_id})
+            top_player_new = await scores_col.find_one({"user_id": top_player_id})
+
+            await message.answer(
+                f"🤏 Карма оказалась быстрой! Вас поймали за руку, и вы отдали {amount} фишек игроку {top_player_name} в качестве компенсации.\n\n"
+                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
+                f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
+            )
+        else:
+            amount = int(top_player.get('balance', 0) * 0.15)
+            if amount <= 0:
+                await message.answer(f"Вы попытались обокрасть {top_player_name}, но у него в карманах ветер свищет! Ничего не вышло. 💨")
+                return
+            
+            await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}})
+            await scores_col.update_one({"user_id": top_player_id}, {"$inc": {"balance": -amount}})
+
+            user_doc_new = await scores_col.find_one({"user_id": user_id})
+            top_player_new = await scores_col.find_one({"user_id": top_player_id})
+
+            await message.answer(
+                f"🤏 Удачная вылазка! Вы использовали «Дырявый карман» и стащили {amount} фишек у хайроллера {top_player_name}!\n\n"
+                f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
+                f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
+            )
 
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
