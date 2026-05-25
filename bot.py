@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # --- КОНФИГ ---
 TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+RAPID_KEY = os.getenv("RAPIDAPI_KEY")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
@@ -65,26 +66,38 @@ def calculate_win(dice_value):
     else: return -5
 
 # --- ПОМОЩНИКИ ---
-async def download_video_cobalt(url: str):
-    api_url = "https://co.wuk.sh/api/json"
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    payload = {"url": url, "vQuality": "720", "isNoTTWatermark": True, "isAudioOnly": False}
+async def download_video_rapid(url):
+    if not RAPID_KEY: return None
+    api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
+    headers = {"Content-Type": "application/json", "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com", "x-rapidapi-key": RAPID_KEY}
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(api_url, json=payload, headers=headers, timeout=60) as resp:
+            async with session.post(api_url, json={"url": url}, headers=headers, timeout=30) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    if data.get("status") == "stream" and data.get("url"):
-                        return {"url": data["url"]}
-                    else:
-                        print(f"Cobalt API failed with status: {data.get('status')}, text: {data.get('text')}")
-                        return None
-                else:
-                    print(f"Cobalt API request failed with status code: {resp.status}")
-                    return None
+                    medias = data.get('medias', [])
+                    best_video = None
+                    max_pixels = 0
+                    if medias:
+                        for m in medias:
+                            if m.get('extension') == 'mp4' and m.get('quality'):
+                                try:
+                                    width = m.get('width', 0)
+                                    height = m.get('height', 0)
+                                    pixels = width * height
+                                    if pixels > max_pixels:
+                                        max_pixels = pixels
+                                        best_video = {"url": m['url'], "width": width, "height": height}
+                                except (KeyError, TypeError):
+                                    continue
+                        if not best_video and medias:
+                            first_url = medias[0].get('url')
+                            if first_url:
+                                return {"url": first_url, "width": None, "height": None}
+                    return best_video
         except Exception as e:
-            print(f"Cobalt API request error: {e}")
-            return None
+            print(f"Video download error: {e}")
+    return None
 
 async def ask_model(messages, temp=0.8):
     if not client: return "Башмак отдыхает."
@@ -518,57 +531,52 @@ async def send_gambling_summary(chat_id):
 async def handle_message(message: types.Message):
     if message.from_user.is_bot or not message.text or message.text.startswith('/') or (message.dice and message.dice.emoji in ['🎰', '⚽']):
         return
-
     cid = message.chat.id
     history = get_history(cid)
     text = message.text
-
+    
+    # Ищем первую попавшуюся ссылку в сообщении
     url_pattern = r'https?://[^\s]+'
     found_urls = re.findall(url_pattern, text)
-    
-    video_url = None
+    url_to_download = None
     if found_urls:
-        supported_domains = ["youtube.com", "youtu.be", "instagram.com", "tiktok.com"]
-        for url in found_urls:
-            cleaned_url = url.rstrip('>')
-            if any(domain in cleaned_url for domain in supported_domains):
-                video_url = cleaned_url
-                break
-    
-    if video_url:
-        processing_msg = await message.reply("😼 Нашел ссылку, пытаюсь стырить видео...")
-        await bot.send_chat_action(cid, "upload_video")
-        
-        video_info = await download_video_cobalt(video_url)
-        
-        if processing_msg:
-             await bot.delete_message(chat_id=cid, message_id=processing_msg.message_id)
+        url_to_download = found_urls[0]
 
-        if video_info and video_info.get("url"):
+    is_video_link = False
+    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "youtube.com/" in url_to_download or "youtu.be/" in url_to_download):
+        is_video_link = True
+
+    if is_video_link:
+        await bot.send_chat_action(cid, "upload_video")
+        # Не преобразуем URL, передаем как есть
+        video_info = await download_video_rapid(url_to_download)
+        if video_info:
             v_url = video_info['url']
+            width = video_info.get('width')
+            height = video_info.get('height')
+            
             try:
                 async with aiohttp.ClientSession() as s:
-                    async with s.get(v_url, timeout=60) as r:
+                    async with s.get(v_url) as r:
                         if r.status == 200:
-                            content = await r.read()
-                            if len(content) < 50 * 1024 * 1024:
+                            video_content = await r.read()
+                            if len(video_content) < 50 * 1024 * 1024:
                                 await message.reply_video(
-                                    BufferedInputFile(content, filename="v.mp4"), 
-                                    caption="😼 Стырил"
+                                    BufferedInputFile(video_content, filename="v.mp4"), 
+                                    caption="😼 Стырил",
+                                    width=width, 
+                                    height=height
                                 )
                             else:
-                                await message.reply("Видео слишком большое, не могу отправить. 😼")
+                                await message.reply("Видео слишком большое для отправки. 😼")
                         else:
-                            await message.reply(f"Не удалось скачать видеопоток ({r.status}). 😼")
-
-            except asyncio.TimeoutError:
-                await message.reply("Не удалось скачать видео за 60 секунд. 😼")
+                             await message.reply("Не удалось загрузить видео, которое вернул API. 😼")
             except Exception as e:
-                print(f"Failed to download or send video from cobalt stream: {e}")
-                await message.reply("Ошибка при обработке видео. 😼")
+                 print(f"Error sending video: {e}")
+                 await message.reply("Произошла ошибка при отправке видео. 😼")
         else:
-            await message.reply("Не удалось обработать ссылку через Cobalt. Либо ссылка битая, либо сервис недоступен. 😼")
-        return
+            await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
+        return # Stop processing after attempting to download
 
     history.append({"role": "user", "name": message.from_user.first_name, "content": text})
     try: 
