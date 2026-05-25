@@ -4,7 +4,7 @@ from collections import deque
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandObject
 from aiogram.enums import ChatType
-from aiogram.types import BotCommand, BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BotCommand, BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from groq import AsyncGroq
 import aiohttp
 from aiohttp import web
@@ -139,17 +139,20 @@ async def cmd_inventory(message: types.Message):
     text = "🎒 Ваш инвентарь:\n\n"
     item_counts = {item_key: inventory_doc["items"].count(item_key) for item_key in set(inventory_doc["items"])}
     
+    buttons = []
     for item_key, count in sorted(item_counts.items()):
         item = ITEMS[item_key]
-        text += f"{item['name']} (x{count})\n_Описание: {item['description']}_\n\n"
-
-    buttons = []
-    for item_key in sorted(item_counts.keys()):
-        item = ITEMS[item_key]
-        buttons.append([InlineKeyboardButton(text=f"Использовать {item['name']}", switch_inline_query_current_chat=f"/use {item_key} ")])
+        text += f"{item['name']} (x{count})\nОписание: {item['description']}\n\n"
+        buttons.append([InlineKeyboardButton(text=f"Использовать {item['name']}", callback_data=f"use_item:{item_key}")])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode=None)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("use_item:"))
+async def process_use_item_callback(callback_query: CallbackQuery):
+    item_key = callback_query.data.split(":")[1]
+    await callback_query.answer(f"Используем {ITEMS[item_key]['name']}...")
+    await use_item_logic(callback_query.from_user, item_key, callback_query.message)
 
 @dp.message(Command("get_item"))
 async def cmd_get_item(message: types.Message):
@@ -173,24 +176,17 @@ async def cmd_get_item(message: types.Message):
     new_balance = updated_user_doc['balance']
     await message.answer(f"Вы потратили {cost} фишек и получили: {ITEMS[item_key]['name']}!\nВаш новый баланс: {new_balance} фишек. 🎰")
 
-@dp.message(Command("use"))
-async def cmd_use(message: types.Message, command: CommandObject):
-    user_id = message.from_user.id
-    user_name = message.from_user.first_name
-
-    if command.args is None:
-        await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
-        return
-
-    item_key = command.args.strip().lower()
+async def use_item_logic(user: types.User, item_key: str, context_message: types.Message, original_message: types.Message = None):
+    user_id = user.id
+    user_name = user.first_name
 
     if item_key not in ITEMS:
-        await message.reply(f"Неверный предмет. Доступные: { ', '.join(ITEMS.keys()) }")
+        await context_message.answer(f"Неверный предмет. Доступные: { ', '.join(ITEMS.keys()) }")
         return
 
     inventory_doc = await inventories_col.find_one({"user_id": user_id})
     if not inventory_doc or item_key not in inventory_doc.get("items", []):
-        await message.reply("У вас нет такого предмета. 😕")
+        await context_message.answer("У вас нет такого предмета. 😕")
         return
 
     current_items = inventory_doc.get("items", [])
@@ -200,19 +196,19 @@ async def cmd_use(message: types.Message, command: CommandObject):
     item = ITEMS[item_key]
 
     if item["requires_target"]:
-        if not message.reply_to_message:
-            await message.reply(f"Чтобы использовать {item['name']}, ответьте на сообщение цели.")
+        if not original_message or not original_message.reply_to_message:
+            await context_message.answer(f"Чтобы использовать {item['name']}, ответьте на сообщение цели.")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
-        target_user = message.reply_to_message.from_user
+        target_user = original_message.reply_to_message.from_user
         if target_user.id == user_id:
-            await message.reply("Нельзя использовать это на себя! 🎰")
+            await context_message.answer("Нельзя использовать это на себя! 🎰")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         
         bot_user = await bot.get_me()
         if target_user.is_bot and target_user.id != bot_user.id:
-            await message.reply("Боты невосприимчивы к магии предметов (кроме меня, конечно). 🤖")
+            await context_message.answer("Боты невосприимчивы к магии предметов (кроме меня, конечно). 🤖")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
 
@@ -222,18 +218,18 @@ async def cmd_use(message: types.Message, command: CommandObject):
         await scores_col.update_one({"user_id": target_id}, {"$addToSet": {"active_effects": item_key}}, upsert=True)
         await scores_col.update_one({"user_id": target_id}, {"$setOnInsert": {"name": target_name, "balance": 100}}, upsert=True)
 
-        await message.answer(f"{user_name} использовал {item['name']} на игрока {target_name}! 😈")
+        await context_message.answer(f"{user_name} использовал {item['name']} на игрока {target_name}! 😈")
         return
 
     if item_key == "money_pouch":
         await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": 10}}, upsert=True)
         user_doc = await scores_col.find_one({"user_id": user_id})
         new_balance = user_doc.get("balance", 10)
-        await message.reply(f"💰 Вы использовали Мешочек мелочи и получили +10 фишек! Ваш баланс: {new_balance}")
+        await context_message.answer(f"💰 Вы использовали Мешочек мелочи и получили +10 фишек! Ваш баланс: {new_balance}")
 
     elif item_key == "golden_boot":
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "golden_boot_active"}}, upsert=True)
-        await message.reply("⚽️ Вы использовали Золотой Бутс! Теперь кидайте эмодзи ⚽, чтобы ударить по воротам.")
+        await context_message.answer("⚽️ Вы использовали Золотой Бутс! Теперь кидайте эмодзи ⚽, чтобы ударить по воротам.")
 
     elif item_key == "chaos_cube":
         bot_user = await bot.get_me()
@@ -241,7 +237,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
         all_players = await all_players_cursor.to_list(length=None)
         
         if not all_players:
-            await message.reply("В казино больше нет игроков, чтобы стать жертвой хаоса. 🎲")
+            await context_message.answer("В казино больше нет игроков, чтобы стать жертвой хаоса. 🎲")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
         
@@ -256,18 +252,18 @@ async def cmd_use(message: types.Message, command: CommandObject):
         user_doc = await scores_col.find_one({"user_id": user_id})
         victim_doc = await scores_col.find_one({"user_id": victim_id})
 
-        await message.answer(f"🎲 Кубик Хаоса в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
+        await context_message.answer(f"🎲 Кубик Хаоса в действии!\nВы выбросили {roll}. {roll} фишек переходят от игрока {victim_name} к вам.\nВаш баланс: {user_doc['balance']}\nБаланс {victim_name}: {victim_doc['balance'] if victim_doc else 'N/A'}")
 
     elif item_key == "madness_coin":
         await scores_col.update_one({"user_id": user_id}, {"$addToSet": {"active_effects": "madness_coin"}}, upsert=True)
-        await message.reply("🌓 Вы использовали Монету Безумия! Ваш следующий спин определит судьбу. Удачи... или нет. 😈")
+        await context_message.answer("🌓 Вы использовали Монету Безумия! Ваш следующий спин определит судьбу. Удачи... или нет. 😈")
     
     elif item_key == "stone_rain":
         all_players_cursor = scores_col.find({}, {"user_id": 1, "name": 1})
         all_players = await all_players_cursor.to_list(length=None)
         
         if not all_players:
-            await message.reply("В казино нет игроков, чтобы устроить апокалипсис. 🌧️")
+            await context_message.answer("В казино нет игроков, чтобы устроить апокалипсис. 🌧️")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
 
@@ -287,19 +283,19 @@ async def cmd_use(message: types.Message, command: CommandObject):
             update_summary.append(f"{player_name}: {sign}{change}")
 
         summary_message = "🌧️ Начался дождь из камней! 🌧️\nФишки всех игроков изменились:\n" + "\n".join(update_summary)
-        await message.answer(summary_message)
+        await context_message.answer(summary_message)
     
     elif item_key == "leaky_pocket":
         all_players_sorted = await scores_col.find({}).sort("balance", -1).to_list(length=2)
 
-        if not all_players_sorted or (len(all_players_sorted) == 1 and all_players_sorted[0]['user_id'] == user_id):
-            await message.reply("В казино больше некого обчищать. Вы единственный игрок. 🤏")
+        user_is_top_or_only_player = not all_players_sorted or (len(all_players_sorted) == 1 and all_players_sorted[0]['user_id'] == user_id)
+        
+        if user_is_top_or_only_player:
+            await context_message.answer("В казино больше некого обчищать. Либо вы топ-1, либо единственный игрок. 🤏")
             await inventories_col.update_one({"user_id": user_id}, {"$push": {"items": item_key}})
             return
 
-        top_player = all_players_sorted[0]
-        if top_player['user_id'] == user_id:
-            top_player = all_players_sorted[1]
+        top_player = all_players_sorted[0] if all_players_sorted[0]['user_id'] != user_id else all_players_sorted[1]
         
         top_player_id = top_player['user_id']
         top_player_name = top_player.get('name', 'Anon')
@@ -308,7 +304,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
         if random.random() < 0.3:
             amount = int(user_doc.get('balance', 0) * 0.15)
             if amount <= 0:
-                await message.answer(f"Вы попытались обокрасть {top_player_name}, но вас поймали! К счастью, у вас и красть нечего. Вы ничего не потеряли. 💨")
+                await context_message.answer(f"Вы попытались обокрасть {top_player_name}, но вас поймали! К счастью, у вас и красть нечего. Вы ничего не потеряли. 💨")
                 return
 
             await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -amount}})
@@ -317,7 +313,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
             user_doc_new = await scores_col.find_one({"user_id": user_id})
             top_player_new = await scores_col.find_one({"user_id": top_player_id})
 
-            await message.answer(
+            await context_message.answer(
                 f"🤏 Карма оказалась быстрой! Вас поймали за руку, и вы отдали {amount} фишек игроку {top_player_name} в качестве компенсации.\n\n"
                 f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
                 f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
@@ -325,7 +321,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
         else:
             amount = int(top_player.get('balance', 0) * 0.15)
             if amount <= 0:
-                await message.answer(f"Вы попытались обокрасть {top_player_name}, но у него в карманах ветер свищет! Ничего не вышло. 💨")
+                await context_message.answer(f"Вы попытались обокрасть {top_player_name}, но у него в карманах ветер свищет! Ничего не вышло. 💨")
                 return
             
             await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}})
@@ -334,11 +330,19 @@ async def cmd_use(message: types.Message, command: CommandObject):
             user_doc_new = await scores_col.find_one({"user_id": user_id})
             top_player_new = await scores_col.find_one({"user_id": top_player_id})
 
-            await message.answer(
+            await context_message.answer(
                 f"🤏 Удачная вылазка! Вы использовали «Дырявый карман» и стащили {amount} фишек у хайроллера {top_player_name}!\n\n"
                 f"Ваш баланс: {user_doc_new.get('balance', 'N/A')}\n"
                 f"Баланс {top_player_name}: {top_player_new.get('balance', 'N/A')}"
             )
+
+@dp.message(Command("use"))
+async def cmd_use(message: types.Message, command: CommandObject):
+    if command.args is None:
+        await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
+        return
+    item_key = command.args.strip().lower()
+    await use_item_logic(message.from_user, item_key, message, original_message=message)
 
 # 3. КАЗИНО
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
@@ -367,7 +371,7 @@ async def handle_dice(message: types.Message):
     current_balance = user_doc.get('balance', 0)
 
     if is_new_user:
-        item_descriptions = "\n".join([f"- {item['name']}: _{item['description']}_" for item in ITEMS.values()])
+        item_descriptions = "\n".join([f"- {item['name']}: {item['description']}" for item in ITEMS.values()])
         
         welcome_text = f'''😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
 
@@ -407,7 +411,7 @@ async def handle_dice(message: types.Message):
 
 Да начнутся игры! Делай свою первую ставку. 🎰
 '''
-        await message.answer(welcome_text)
+        await message.answer(welcome_text, parse_mode=None)
 
     await spin_counts_col.update_one({'user_id': user_id},{'$inc': {'count': 1}},upsert=True)
 
