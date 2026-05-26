@@ -151,6 +151,33 @@ async def cmd_admin_give_item(message: types.Message, command: CommandObject):
     await inventories_col.update_one({"user_id": message.from_user.id}, {"$push": {"items": item_key}}, upsert=True)
     await message.answer(f"Вы получили: {ITEMS[item_key]['name']}")
 
+@dp.message(Command("admin_force_daily_reset"))
+async def cmd_force_daily_reset(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await message.answer("⏳ Принудительно запускаю ежедневный сброс и раздачу предметов...")
+
+    # 1. Send summary for the previous day
+    all_chat_ids_summary = list(user_history.keys())
+    if not all_chat_ids_summary:
+        await message.answer("ℹ️ Нет активных чатов для отправки итогов.")
+    else:
+        for cid in all_chat_ids_summary:
+            try:
+                await send_gambling_summary(cid)
+            except Exception as e:
+                print(f"Failed to send summary to {cid}: {e}")
+        await message.answer("✅ Итоги дня отправлены.")
+
+    # 2. Reset spins
+    await reset_daily_state()
+    await message.answer("✅ Счетчики спинов сброшены.")
+
+    # 3. Distribute items
+    await distribute_daily_items_and_announce()
+    await message.answer("✅ Ежедневные предметы розданы и анонсированы.")
+
+    await message.answer("🎉 Готово! Все ежедневные задачи выполнены.")
+
 # 2. ИНВЕНТАРЬ И ПРЕДМЕТЫ
 @dp.message(Command("inventory"))
 async def cmd_inventory(message: types.Message):
@@ -714,7 +741,7 @@ async def handle_message(message: types.Message):
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
         return
 
-    history.append({"role": "user", "name": message.from_user.first_name, "content": text})
+    history.append({'role': 'user', 'name': message.from_user.first_name, 'content': text})
     try: 
         await scores_col.update_one({"user_id": message.from_user.id}, {"$set": {"name": message.from_user.first_name}}, upsert=False)
     except: pass
@@ -995,8 +1022,8 @@ async def scheduler():
 
         game_state_doc = await game_state_col.find_one()
         if game_state_doc:
-            start_date = game_state_doc['start_date']
-            if (now - start_date).days >= 14:
+            start_date = game_state_doc.get('start_date')
+            if start_date and (now - start_date).days >= 14:
                 all_chat_ids = list(user_history.keys())
                 for cid in all_chat_ids:
                     await end_game(cid)
@@ -1004,40 +1031,61 @@ async def scheduler():
                 await asyncio.sleep(61)
                 continue
 
+        # --- ЕЖЕДНЕВНЫЙ СБРОС В ПОЛНОЧЬ ---
         if now.hour == 0 and now.minute == 0:
+            print(f"[{datetime.datetime.now()}] Triggering midnight tasks.")
+            
+            # 1. Отправка итогов за прошедший день
+            all_chat_ids_summary = list(user_history.keys())
+            for cid in all_chat_ids_summary:
+                try:
+                    await send_gambling_summary(cid)
+                except Exception as e:
+                    print(f"Failed to send summary to {cid}: {e}")
+
+            # 2. Сброс ежедневных состояний (спины)
             await reset_daily_state()
+
+            # 3. Раздача ежедневных предметов
+            await distribute_daily_items_and_announce()
+
+            # 4. Очистка истории сообщений для нового дня
             for cid in user_history:
                 user_history[cid].clear()
+
+            print(f"[{datetime.datetime.now()}] All midnight tasks completed.")
             await asyncio.sleep(61)
+            continue
+
+        # --- ДРУГИЕ ЗАДАЧИ ПО РАСПИСАНИЮ ---
         
-        if now.minute % 30 == 0: # Проверка и очистка амулетов каждые 30 минут
+        # Очистка амулетов (каждые 30 минут)
+        if now.minute % 30 == 0:
             await cleanup_expired_amulets()
 
+        # Использование предмета ботом (в полдень)
         if now.hour == 12 and now.minute == 0:
             print(f"[{datetime.datetime.now()}] Triggering bot item use.")
             await execute_bot_item_use()
             await asyncio.sleep(61)
+            continue # Используем continue, чтобы избежать двойного sleep
 
+        # Спины бота
         global bot_spin_time_1, bot_spin_time_2
         if bot_spin_time_1 and now.hour == bot_spin_time_1.hour and now.minute == bot_spin_time_1.minute:
             print(f"[{datetime.datetime.now()}] Triggering bot spin 1.")
             await execute_bot_spin()
             bot_spin_time_1 = None
             await asyncio.sleep(61)
+            continue 
 
         if bot_spin_time_2 and now.hour == bot_spin_time_2.hour and now.minute == bot_spin_time_2.minute:
             print(f"[{datetime.datetime.now()}] Triggering bot spin 2.")
             await execute_bot_spin()
             bot_spin_time_2 = None
             await asyncio.sleep(61)
-
-        if now.hour == 22 and now.minute == 0:
-            await distribute_daily_items_and_announce()
-            all_chat_ids = list(user_history.keys())
-            for cid in all_chat_ids:
-                await send_gambling_summary(cid)
-            await asyncio.sleep(61)
-
+            continue
+        
         await asyncio.sleep(30)
 
 async def main():
