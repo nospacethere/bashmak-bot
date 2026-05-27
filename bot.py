@@ -467,8 +467,11 @@ async def handle_dice(message: types.Message):
     user_name = message.from_user.first_name
 
     game_state_doc = await game_state_col.find_one()
-    if not game_state_doc:
-        await game_state_col.insert_one({"start_date": datetime.datetime.now(pytz.timezone('Europe/Moscow'))})
+    if not game_state_doc or 'start_date' not in game_state_doc:
+        # First-ever spin, start the game
+        start_date = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+        await game_state_col.update_one({}, {"$set": {"start_date": start_date}}, upsert=True)
+        print(f"New game season started at {start_date}")
 
     user_doc = await scores_col.find_one({'user_id': user_id})
     is_new_user = False
@@ -511,7 +514,7 @@ async def handle_dice(message: types.Message):
 
 У тебя есть 2 бесплатные попытки в день. Каждая ставка может изменить всё. Используй их с умом!
 
-Игра длится 14 дней. В конце сезона казино закрывается, а лучшие игроки попадают в Зал Славы!
+Игра длится 14 дней. В конце сезона казино закрывается, а лучшие игроки попадают в Зал Славы! Сегодня 1-й день. (/day)
 
 ---
 
@@ -536,6 +539,7 @@ async def handle_dice(message: types.Message):
 - /top — посмотреть зал славы.
 - /inventory — проверить свои предметы.
 - /get_item — купить случайный предмет за 10 фишек.
+- /day — узнать текущий день сезона.
 
 Да начнутся игры! Делай свою первую ставку. 🎰
 '''
@@ -553,32 +557,23 @@ async def handle_dice(message: types.Message):
     effect_messages = []
 
     # --- ПРИМЕНЕНИЕ ЭФФЕКТОВ ---
-    # Эффекты применяются в строгом порядке для корректного взаимодействия.
-    # 1. Двойная ставка (чтобы другие эффекты работали с удвоенным значением)
-    # 2. Монета безумия (чтобы отменять уже удвоенный выигрыш/проигрыш)
-
-    # 1. Эффект "Двойная Ставка"
+    # 1. Двойная ставка
     if "double_down" in active_effects:
         final_change *= 2
         effect_messages.append(f"⏫ Двойная Ставка удваивает результат!")
         effects_to_remove.append("double_down")
 
-    # 2. Эффект "Монета Безумия"
+    # 2. Монета безумия
     if "madness_coin" in active_effects:
         is_shield = random.random() < 0.5
-        
-        # Запоминаем значение ДО возможной отмены, чтобы показать его в сообщении
         change_before_cancellation = final_change 
         
-        # 50% шанс: отмена проигрыша
         if is_shield and final_change < 0:
             final_change = 0
             effect_messages.append(f"🌓 Сработал ЩИТ Монеты Безумия! Проигрыш {change_before_cancellation} отменен.")
-        # 50% шанс: отмена выигрыша
         elif not is_shield and final_change > 0:
             final_change = 0
             effect_messages.append(f"🌓 Сработала ПУСТОТА Монеты Безумия! Выигрыш {change_before_cancellation} отменен.")
-        # Если эффект монеты не сработал (например, выигрыш при щите или проигрыш при пустоте), просто добавляем информацию
         else:
              effect_messages.append(f"🌓 Монета Безумия была использована, но ее эффект не пригодился.")
 
@@ -587,13 +582,12 @@ async def handle_dice(message: types.Message):
     # --- ОБНОВЛЕНИЕ БАЛАНСА И УДАЛЕНИЕ ЭФФЕКТОВ ---
     update_query = {"$inc": {"balance": final_change}}
     if effects_to_remove:
-        # Используем $pull, чтобы удалить все сработавшие эффекты из массива
         update_query["$pull"] = {"active_effects": {"$in": effects_to_remove}}
     await scores_col.update_one({'user_id': user_id}, update_query)
     
     new_balance = current_balance + final_change
 
-    # Логика Вампирского Амулета (срабатывает на ОСНОВНОЙ выигрыш, до его отмены)
+    # Логика Вампирского Амулета
     if base_change > 0:
         amulet = await amulets_col.find_one({"victim_id": user_id, "expires_at": {"$gt": datetime.datetime.now(pytz.utc)}})
         if amulet:
@@ -605,7 +599,7 @@ async def handle_dice(message: types.Message):
                 effect_messages.append(f"🩸 Вампирский Амулет игрока {owner_name} попытался сработать, но ваш Щит Справедливости заблокировал кражу! Щит разрушен. 🛡️")
             else:
                 owner_id = amulet['owner_id']
-                stolen_amount = int(base_change * 0.5) # Воруем от базового выигрыша
+                stolen_amount = int(base_change * 0.5)
                 
                 await scores_col.update_one({"user_id": user_id}, {"$inc": {"balance": -stolen_amount}})
                 await scores_col.update_one({"user_id": owner_id}, {"$inc": {"balance": stolen_amount}}, upsert=True)
@@ -625,7 +619,6 @@ async def handle_dice(message: types.Message):
     if full_effect_message:
         await message.reply(f"{cost_msg}{full_effect_message} Итог: {final_change}. Баланс: {new_balance} 🎰")
     else:
-        # Сообщение по умолчанию, если не было эффектов
         if base_change >= 10: await message.reply(f"{cost_msg}Крупный выигрыш! +{base_change}. Баланс: {new_balance} 🎰")
         elif base_change > 0: await message.reply(f"{cost_msg}Держи +{base_change}. Баланс: {new_balance} 🎰")
         else: await message.reply(f"{cost_msg}Мимо. {base_change}. Баланс: {new_balance} 🎰")
@@ -661,6 +654,23 @@ async def handle_football(message: types.Message):
 async def cmd_top(message: types.Message):
     text = await get_leaderboard_text()
     await message.answer(text)
+
+@dp.message(Command("day"))
+async def cmd_day(message: types.Message):
+    """Узнать текущий день игрового сезона."""
+    game_state_doc = await game_state_col.find_one()
+    if not game_state_doc or 'start_date' not in game_state_doc:
+        await message.answer("🗓️ Игровой сезон еще не начался! Сделайте первую ставку, чтобы запустить его.")
+        return
+
+    start_date = game_state_doc.get('start_date')
+    now = datetime.datetime.now(start_date.tzinfo) # Use the same timezone as start_date
+    day_number = (now - start_date).days + 1
+
+    if day_number > 14:
+        await message.answer(f"🗓️ Игровой сезон (день {day_number}/14) уже должен был завершиться. Ждем финала!")
+    else:
+        await message.answer(f"🗓️ Идет {day_number}-й день из 14 игрового сезона.")
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: types.Message):
@@ -772,15 +782,20 @@ bot_spin_time_2 = None
 
 def schedule_bot_spins():
     global bot_spin_time_1, bot_spin_time_2
+    # Ensure spins are not scheduled for the past for today
+    now_moscow = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+    
     hour1 = random.randint(9, 12)
     minute1 = random.randint(0, 59)
-    bot_spin_time_1 = datetime.time(hour1, minute1)
+    t1 = datetime.time(hour1, minute1)
+    bot_spin_time_1 = t1 if t1 > now_moscow.time() else None
 
     hour2 = random.randint(18, 21)
     minute2 = random.randint(0, 59)
-    bot_spin_time_2 = datetime.time(hour2, minute2)
+    t2 = datetime.time(hour2, minute2)
+    bot_spin_time_2 = t2 if t2 > now_moscow.time() else None
 
-    print(f"[{datetime.datetime.now()}] Bot spins scheduled for {bot_spin_time_1.strftime('%H:%M')} and {bot_spin_time_2.strftime('%H:%M')} MSK")
+    print(f"[{datetime.datetime.now()}] Bot spins scheduled. Spin 1: {bot_spin_time_1}, Spin 2: {bot_spin_time_2} MSK")
 
 async def execute_bot_spin():
     bot_user = await bot.get_me()
@@ -1006,87 +1021,103 @@ async def reset_daily_state():
     schedule_bot_spins()
     print(f"[{datetime.datetime.now()}] Daily spin counts have been reset.")
 
-async def end_game(chat_id):
+async def end_game_action():
+    """Wipes all data and announces the end of the season."""
+    print(f"[{datetime.datetime.now()}] Game season of 14 days has ended.")
     top_text = await get_leaderboard_text()
-    announcement = f"🎉 Игровой сезон окончен! 🎉\n\n14 дней пролетели как один миг! Казино «Гемблинг Башмак» закрывает свои двери... до следующего раза.\n\nА вот и наши легенды, сорвавшие куш:\n{top_text}\n\nСпасибо за игру! Фишки и инвентарь обнулены. Новый сезон начнется, как только появится первый игрок. До новых встреч, лудоманы! 🎰"
-    await bot.send_message(chat_id, announcement)
+    announcement = (
+        f"🎉 Игровой сезон окончен! 🎉\n\n"
+        f"14 дней пролетели как один миг! Казино «Гемблинг Башмак» закрывает свои двери... до следующего раза.\n\n"
+        f"А вот и наши легенды, сорвавшие куш:\n{top_text}\n\n"
+        f"Спасибо за игру! Фишки и инвентарь обнулены. Новый сезон начнется, как только появится первый игрок. До новых встреч, лудоманы! 🎰"
+    )
+    
+    all_chat_ids = list(user_history.keys())
+    for cid in all_chat_ids:
+        try:
+            await bot.send_message(cid, announcement)
+        except Exception as e:
+            print(f"Failed to send end game message to {cid}: {e}")
+
+    # Wipe all data
     await scores_col.drop()
     await inventories_col.drop()
     await spin_counts_col.drop()
     await game_state_col.drop()
     await amulets_col.drop()
+    
+    user_history.clear()
+    print(f"[{datetime.datetime.now()}] All game data has been wiped.")
+
 
 async def scheduler():
+    print("Scheduler starting...")
+    await game_state_col.update_one({}, {"$setOnInsert": {"last_daily_reset_date": None}}, upsert=True)
+
     while True:
-        now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+        try:
+            now_moscow = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+            today_str = now_moscow.date().isoformat()
+            game_state = await game_state_col.find_one({})
 
-        game_state_doc = await game_state_col.find_one()
-        if game_state_doc:
-            start_date = game_state_doc.get('start_date')
-            if start_date and (now - start_date).days >= 14:
-                all_chat_ids = list(user_history.keys())
-                for cid in all_chat_ids:
-                    await end_game(cid)
-                user_history.clear()
-                await asyncio.sleep(61)
-                continue
+            # --- Game End Logic ---
+            if game_state and game_state.get('start_date'):
+                start_date = game_state.get('start_date')
+                if (now_moscow - start_date).days >= 14:
+                    await end_game_action()
+                    await asyncio.sleep(3600) # Sleep for an hour to prevent constant re-wiping
+                    continue
 
-        # --- ЕЖЕДНЕВНЫЙ СБРОС В ПОЛНОЧЬ ---
-        if now.hour == 0 and now.minute == 0:
-            print(f"[{datetime.datetime.now()}] Triggering midnight tasks.")
+            # --- Daily Reset Logic ---
+            last_reset_date = game_state.get("last_daily_reset_date")
+            if last_reset_date != today_str:
+                print(f"[{datetime.datetime.now()}] New day detected ({today_str}). Previous reset: {last_reset_date}. Running daily tasks.")
+                
+                all_chat_ids_summary = list(user_history.keys())
+                for cid in all_chat_ids_summary:
+                    try:
+                        await send_gambling_summary(cid)
+                    except Exception as e:
+                        print(f"Failed to send summary to {cid}: {e}")
+
+                await reset_daily_state()
+                await distribute_daily_items_and_announce()
+
+                for cid in user_history: user_history[cid].clear()
+
+                await game_state_col.update_one({}, {"$set": {"last_daily_reset_date": today_str}})
+                print(f"[{datetime.datetime.now()}] All daily tasks completed for {today_str}.")
+
+            # --- Other Scheduled Tasks ---
+            if now_moscow.minute % 10 == 0:
+                await cleanup_expired_amulets()
+
+            # Bot item use (at noon), once per day
+            noon_task_key = f"noon_task_done_{today_str}"
+            if now_moscow.hour == 12 and not game_state.get(noon_task_key):
+                print(f"[{datetime.datetime.now()}] Triggering bot item use.")
+                await execute_bot_item_use()
+                await game_state_col.update_one({}, {"$set": {noon_task_key: True}})
+
+            # Bot spins
+            global bot_spin_time_1, bot_spin_time_2
+            now_time = now_moscow.time()
+
+            if bot_spin_time_1 and now_time >= bot_spin_time_1:
+                print(f"[{datetime.datetime.now()}] Triggering bot spin 1 (scheduled for {bot_spin_time_1}).")
+                await execute_bot_spin()
+                bot_spin_time_1 = None
+
+            if bot_spin_time_2 and now_time >= bot_spin_time_2:
+                print(f"[{datetime.datetime.now()}] Triggering bot spin 2 (scheduled for {bot_spin_time_2}).")
+                await execute_bot_spin()
+                bot_spin_time_2 = None
             
-            # 1. Отправка итогов за прошедший день
-            all_chat_ids_summary = list(user_history.keys())
-            for cid in all_chat_ids_summary:
-                try:
-                    await send_gambling_summary(cid)
-                except Exception as e:
-                    print(f"Failed to send summary to {cid}: {e}")
+            await asyncio.sleep(30)
+        except Exception as e:
+            print(f"!!!FATAL SCHEDULER ERROR: {e}!!!")
+            await asyncio.sleep(60)
 
-            # 2. Сброс ежедневных состояний (спины)
-            await reset_daily_state()
-
-            # 3. Раздача ежедневных предметов
-            await distribute_daily_items_and_announce()
-
-            # 4. Очистка истории сообщений для нового дня
-            for cid in user_history:
-                user_history[cid].clear()
-
-            print(f"[{datetime.datetime.now()}] All midnight tasks completed.")
-            await asyncio.sleep(61)
-            continue
-
-        # --- ДРУГИЕ ЗАДАЧИ ПО РАСПИСАНИЮ ---
-        
-        # Очистка амулетов (каждые 30 минут)
-        if now.minute % 30 == 0:
-            await cleanup_expired_amulets()
-
-        # Использование предмета ботом (в полдень)
-        if now.hour == 12 and now.minute == 0:
-            print(f"[{datetime.datetime.now()}] Triggering bot item use.")
-            await execute_bot_item_use()
-            await asyncio.sleep(61)
-            continue # Используем continue, чтобы избежать двойного sleep
-
-        # Спины бота
-        global bot_spin_time_1, bot_spin_time_2
-        if bot_spin_time_1 and now.hour == bot_spin_time_1.hour and now.minute == bot_spin_time_1.minute:
-            print(f"[{datetime.datetime.now()}] Triggering bot spin 1.")
-            await execute_bot_spin()
-            bot_spin_time_1 = None
-            await asyncio.sleep(61)
-            continue 
-
-        if bot_spin_time_2 and now.hour == bot_spin_time_2.hour and now.minute == bot_spin_time_2.minute:
-            print(f"[{datetime.datetime.now()}] Triggering bot spin 2.")
-            await execute_bot_spin()
-            bot_spin_time_2 = None
-            await asyncio.sleep(61)
-            continue
-        
-        await asyncio.sleep(30)
 
 async def main():
     app = web.Application()
@@ -1095,8 +1126,10 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
     await site.start()    
+    
     schedule_bot_spins()
     asyncio.create_task(scheduler())
+    
     await bot.delete_webhook(drop_pending_updates=True)
     
     me = await bot.get_me()
@@ -1105,10 +1138,12 @@ async def main():
     main_commands = [
         BotCommand(command="inventory", description="🎒 Открыть инвентарь"),
         BotCommand(command="top", description="🏆 Посмотреть таблицу лидеров"),
-        BotCommand(command="get_item", description="🎲 Купить случайный предмет (10 фишек)")
+        BotCommand(command="get_item", description="🎲 Купить случайный предмет (10 фишек)"),
+        BotCommand(command="day", description="🗓️ Узнать текущий день сезона")
     ]
     await bot.set_my_commands(main_commands)
 
+    print("Bot started polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
