@@ -1009,6 +1009,50 @@ async def distribute_daily_items_and_announce():
         except Exception as e:
             print(f"Failed to send daily item bonus announcement to chat {cid}: {e}")
 
+async def run_special_event_day_3():
+    """Gives every player 5 chaos cubes on day 3."""
+    print(f"[{datetime.datetime.now()}] Checking for Day 3 special event.")
+    
+    event_key = "day_3_chaos_cube_event_done"
+    game_state = await game_state_col.find_one()
+    if game_state.get(event_key):
+        print("Day 3 event has already been executed.")
+        return
+
+    all_players_cursor = scores_col.find({}, {"user_id": 1})
+    all_players = await all_players_cursor.to_list(length=None)
+    if not all_players:
+        print("No players to give chaos cubes to for day 3 event.")
+        return
+
+    # Give 5 chaos cubes to every player
+    for player in all_players:
+        await inventories_col.update_one(
+            {"user_id": player['user_id']},
+            {"$push": {"items": {"$each": ["chaos_cube"] * 5}}},
+            upsert=True
+        )
+    
+    print(f"Gave 5 chaos cubes to {len(all_players)} players.")
+
+    # Announce the event
+    all_chat_ids = list(user_history.keys())
+    announcement = (
+        f"🎲 Ивент «Парад Хаоса»! 🎲\n\n"
+        f"В честь третьего дня сезона каждый игрок в казино получает по 5 Кубиков Хаоса!\n\n"
+        f"Пусть начнется безумие! Проверьте свой /inventory. 🎰"
+    )
+    for cid in all_chat_ids:
+        try:
+            await bot.send_message(cid, announcement)
+        except Exception as e:
+            print(f"Failed to send day 3 event announcement to chat {cid}: {e}")
+
+    # Mark event as done
+    await game_state_col.update_one({}, {"$set": {event_key: True}})
+    print("Day 3 event has been marked as executed.")
+
+
 # --- ПЛАНИРОВЩИК ---
 async def cleanup_expired_amulets():
     now = datetime.datetime.now(pytz.utc)
@@ -1060,13 +1104,23 @@ async def scheduler():
             today_str = now_moscow.date().isoformat()
             game_state = await game_state_col.find_one({})
 
+            # --- Game Start & Day Calculation ---
+            start_date = game_state.get('start_date')
+            if not start_date:
+                await asyncio.sleep(30)
+                continue
+                
+            current_day = (now_moscow - start_date).days + 1
+
             # --- Game End Logic ---
-            if game_state and game_state.get('start_date'):
-                start_date = game_state.get('start_date')
-                if (now_moscow - start_date).days >= 14:
-                    await end_game_action()
-                    await asyncio.sleep(3600) # Sleep for an hour to prevent constant re-wiping
-                    continue
+            if current_day > 14:
+                await end_game_action()
+                await asyncio.sleep(3600)
+                continue
+
+            # --- Special Event: Day 3 Chaos Cubes ---
+            if current_day == 3:
+                await run_special_event_day_3()
 
             # --- Daily Reset Logic ---
             last_reset_date = game_state.get("last_daily_reset_date")
