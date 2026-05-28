@@ -887,8 +887,9 @@ async def handle_message(message: types.Message):
             height = video_info.get('height')
             
             try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", "Referer": url_to_download}
                 async with aiohttp.ClientSession() as s:
-                    async with s.get(v_url) as r:
+                    async with s.get(v_url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as r:
                         if r.status == 200:
                             video_content = await r.read()
                             if len(video_content) < 50 * 1024 * 1024:
