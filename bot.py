@@ -121,6 +121,40 @@ async def download_video_rapid(url):
             print(f"Video download error: {e}")
     return None
 
+INVIDIOUS_INSTANCES = ["https://inv.nadeko.net", "https://yewtu.be", "https://invidious.snopyta.org"]
+
+def extract_youtube_id(url):
+    import re
+    patterns = [r"(?:youtube\.com/shorts/)([a-zA-Z0-9_-]+)", r"(?:youtube\.com/watch\?v=)([a-zA-Z0-9_-]+)", r"(?:youtu\.be/)([a-zA-Z0-9_-]+)", r"(?:youtube\.com/embed/)([a-zA-Z0-9_-]+)"]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+async def download_youtube_invidious(video_id):
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"{instance}/api/v1/videos/{video_id}", timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    if r.status != 200:
+                        continue
+                    data = await r.json()
+                    for fmt in data.get("formatStreams", []):
+                        if fmt.get("container") == "mp4" and fmt.get("url"):
+                            return {"url": fmt["url"], "width": fmt.get("width"), "height": fmt.get("height")}
+                    best, best_px = None, 0
+                    for fmt in data.get("adaptiveFormats", []):
+                        if fmt.get("container") == "mp4" and fmt.get("type") == "video" and fmt.get("url"):
+                            w, h = (fmt.get("width") or 0), (fmt.get("height") or 0)
+                            if w * h > best_px:
+                                best_px, best = w * h, {"url": fmt["url"], "width": w, "height": h}
+                    if best:
+                        return best
+        except:
+            continue
+    return None
+
 YT_COOKIES_FILE = "cookies.txt"
 
 def get_ydl_opts():
@@ -933,12 +967,19 @@ async def handle_message(message: types.Message):
 
         is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download or "m.youtube.com/" in url_to_download
         video_info = None
-        try:
-            import yt_dlp
-            if is_youtube:
+
+        if is_youtube:
+            try:
+                import yt_dlp
                 video_info = await download_youtube_video(url_to_download)
-        except ImportError:
-            print("yt-dlp not installed, falling back to RapidAPI")
+            except ImportError:
+                print("yt-dlp not installed")
+
+            if not video_info:
+                vid = extract_youtube_id(url_to_download)
+                if vid:
+                    print(f"Trying Invidious for video {vid}")
+                    video_info = await download_youtube_invidious(vid)
 
         if not video_info:
             video_info = await download_video_rapid(url_to_download)
