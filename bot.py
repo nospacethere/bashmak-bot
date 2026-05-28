@@ -87,25 +87,35 @@ async def download_video_rapid(url):
                 if resp.status == 200:
                     data = await resp.json()
                     medias = data.get('medias', [])
-                    best_video = None
-                    max_pixels = 0
-                    if medias:
-                        for m in medias:
-                            if m.get('extension') == 'mp4' and m.get('quality'):
-                                try:
-                                    width = m.get('width', 0)
-                                    height = m.get('height', 0)
-                                    pixels = width * height
-                                    if pixels > max_pixels:
-                                        max_pixels = pixels
-                                        best_video = {"url": m['url'], "width": width, "height": height}
-                                except (KeyError, TypeError):
-                                    continue
-                        if not best_video and medias:
-                            first_url = medias[0].get('url')
-                            if first_url:
-                                return {"url": first_url, "width": None, "height": None}
-                    return best_video
+                    if not medias:
+                        direct_url = data.get('url') or data.get('video') or data.get('download')
+                        if direct_url:
+                            return {"url": direct_url, "width": None, "height": None}
+                        return None
+
+                    best = None
+                    best_pixels = 0
+                    for m in medias:
+                        m_url = m.get('url')
+                        if not m_url:
+                            continue
+                        ext = m.get('extension', '')
+                        mtype = m.get('type', '')
+                        if ext not in ('mp4', 'mov', 'webm') and mtype != 'video':
+                            continue
+                        w = m.get('width', 0) or 0
+                        h = m.get('height', 0) or 0
+                        pixels = w * h
+                        if pixels > best_pixels:
+                            best_pixels = pixels
+                            best = {"url": m_url, "width": w, "height": h}
+
+                    if best:
+                        return best
+
+                    first_url = medias[0].get('url')
+                    if first_url:
+                        return {"url": first_url, "width": None, "height": None}
         except Exception as e:
             print(f"Video download error: {e}")
     return None
@@ -865,7 +875,7 @@ async def handle_message(message: types.Message):
         url_to_download = found_urls[0]
 
     is_video_link = False
-    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "youtube.com/" in url_to_download or "youtu.be/" in url_to_download):
+    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download or "youtube.com/" in url_to_download or "youtu.be/" in url_to_download or "m.youtube.com/" in url_to_download):
         is_video_link = True
 
     if is_video_link:
