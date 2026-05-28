@@ -131,11 +131,15 @@ async def download_youtube_video(url):
         info = await loop.run_in_executor(None, extract)
         video_url = info.get('url')
         if not video_url:
+            print(f"YouTube extract: no url field in response")
             return None
         width = info.get('width')
         height = info.get('height')
-        if info.get('duration', 0) and info['duration'] > 180:
+        duration = info.get('duration', 0) or 0
+        if duration > 180:
+            print(f"YouTube extract: video too long ({duration}s)")
             return None
+        print(f"YouTube extract OK: {duration}s, {width}x{height}")
         return {"url": video_url, "width": width, "height": height}
     except Exception as e:
         print(f"YouTube download error: {e}")
@@ -901,8 +905,18 @@ async def handle_message(message: types.Message):
 
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
+
         is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download or "m.youtube.com/" in url_to_download
-        video_info = await download_youtube_video(url_to_download) if is_youtube else await download_video_rapid(url_to_download)
+        video_info = None
+        try:
+            import yt_dlp
+            if is_youtube:
+                video_info = await download_youtube_video(url_to_download)
+        except ImportError:
+            print("yt-dlp not installed, falling back to RapidAPI")
+
+        if not video_info:
+            video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
             width = video_info.get('width')
