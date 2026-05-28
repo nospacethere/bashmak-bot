@@ -657,7 +657,7 @@ async def cmd_top(message: types.Message):
 
 @dp.message(Command("day"))
 async def cmd_day(message: types.Message):
-    """Узнать текущий день игрового сезона."""
+    "Узнать текущий день игрового сезона."
     game_state_doc = await game_state_col.find_one()
     if not game_state_doc or 'start_date' not in game_state_doc:
         await message.answer("🗓️ Игровой сезон еще не начался! Сделайте первую ставку, чтобы запустить его.")
@@ -1010,7 +1010,7 @@ async def distribute_daily_items_and_announce():
             print(f"Failed to send daily item bonus announcement to chat {cid}: {e}")
 
 async def run_special_event_day_3():
-    """Gives every player 5 chaos cubes on day 3."""
+    "Gives every player 5 chaos cubes on day 3."
     print(f"[{datetime.datetime.now()}] Checking for Day 3 special event.")
     
     event_key = "day_3_chaos_cube_event_done"
@@ -1066,7 +1066,7 @@ async def reset_daily_state():
     print(f"[{datetime.datetime.now()}] Daily spin counts have been reset.")
 
 async def end_game_action():
-    """Wipes all data and announces the end of the season."""
+    "Wipes all data and announces the end of the season."
     print(f"[{datetime.datetime.now()}] Game season of 14 days has ended.")
     top_text = await get_leaderboard_text()
     announcement = (
@@ -1124,7 +1124,7 @@ async def scheduler():
 
             # --- Daily Reset Logic ---
             last_reset_date = game_state.get("last_daily_reset_date")
-            if last_reset_date != today_str:
+            if last_reset_date is None or last_reset_date != today_str:
                 print(f"[{datetime.datetime.now()}] New day detected ({today_str}). Previous reset: {last_reset_date}. Running daily tasks.")
                 
                 all_chat_ids_summary = list(user_history.keys())
