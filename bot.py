@@ -121,18 +121,36 @@ async def download_video_rapid(url):
             print(f"Video download error: {e}")
     return None
 
+YT_COOKIES_FILE = "cookies.txt"
+
+def get_ydl_opts():
+    opts = {
+        "format": "best[ext=mp4]/best",
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["android_creator", "android"]}},
+        "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"}
+    }
+    cookies_b64 = os.getenv("YT_COOKIES")
+    if cookies_b64:
+        import base64
+        try:
+            with open(YT_COOKIES_FILE, "wb") as f:
+                f.write(base64.b64decode(cookies_b64))
+            opts["cookiefile"] = YT_COOKIES_FILE
+            print("Loaded cookies from YT_COOKIES env")
+        except Exception as e:
+            print(f"Failed to load YT_COOKIES: {e}")
+    elif os.path.exists(YT_COOKIES_FILE):
+        opts["cookiefile"] = YT_COOKIES_FILE
+        print("Loaded cookies from cookies.txt")
+    return opts
+
 async def download_youtube_video(url):
     try:
         loop = asyncio.get_event_loop()
         def extract():
-            ydl_opts = {
-                "format": "best[ext=mp4]/best",
-                "quiet": True,
-                "no_warnings": True,
-                "extractor_args": {"youtube": {"player_client": ["android_creator", "android"]}},
-                "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"}
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(get_ydl_opts()) as ydl:
                 info = ydl.extract_info(url, download=False)
                 return info
         info = await loop.run_in_executor(None, extract)
