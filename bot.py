@@ -129,7 +129,8 @@ async def download_youtube_video(url):
                 "format": "best[ext=mp4]/best",
                 "quiet": True,
                 "no_warnings": True,
-                "extractor_args": {"youtube": {"player_client": ["android"]}}
+                "extractor_args": {"youtube": {"player_client": ["android_creator", "android"]}},
+                "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"}
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
