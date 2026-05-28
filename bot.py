@@ -905,6 +905,7 @@ async def handle_message(message: types.Message):
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
 
+        video_info = None
         is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download
         if is_youtube:
             video_info = await download_youtube_piped(url_to_download)
