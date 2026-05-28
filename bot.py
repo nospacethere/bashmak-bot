@@ -125,7 +125,13 @@ async def download_youtube_video(url):
     try:
         loop = asyncio.get_event_loop()
         def extract():
-            with yt_dlp.YoutubeDL({"format": "best[ext=mp4]/best", "quiet": True, "no_warnings": True}) as ydl:
+            ydl_opts = {
+                "format": "best[ext=mp4]/best",
+                "quiet": True,
+                "no_warnings": True,
+                "extractor_args": {"youtube": {"player_client": ["android"]}}
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 return info
         info = await loop.run_in_executor(None, extract)
