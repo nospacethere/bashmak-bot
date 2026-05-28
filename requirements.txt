@@ -4,3 +4,4 @@ aiohttp
 pytz
 motor
 dnspython
+yt-dlp

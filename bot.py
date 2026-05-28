@@ -1,5 +1,6 @@
 
 import os, asyncio, datetime, pytz, random, re
+import yt_dlp
 from collections import deque
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandObject
@@ -119,6 +120,26 @@ async def download_video_rapid(url):
         except Exception as e:
             print(f"Video download error: {e}")
     return None
+
+async def download_youtube_video(url):
+    try:
+        loop = asyncio.get_event_loop()
+        def extract():
+            with yt_dlp.YoutubeDL({"format": "best[ext=mp4]/best", "quiet": True, "no_warnings": True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return info
+        info = await loop.run_in_executor(None, extract)
+        video_url = info.get('url')
+        if not video_url:
+            return None
+        width = info.get('width')
+        height = info.get('height')
+        if info.get('duration', 0) and info['duration'] > 180:
+            return None
+        return {"url": video_url, "width": width, "height": height}
+    except Exception as e:
+        print(f"YouTube download error: {e}")
+        return None
 
 async def ask_model(messages, temp=0.8):
     if not client: return "Башмак отдыхает."
@@ -880,7 +901,8 @@ async def handle_message(message: types.Message):
 
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
-        video_info = await download_video_rapid(url_to_download)
+        is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download or "m.youtube.com/" in url_to_download
+        video_info = await download_youtube_video(url_to_download) if is_youtube else await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
             width = video_info.get('width')
