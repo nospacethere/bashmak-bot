@@ -120,7 +120,29 @@ async def download_video_rapid(url):
             print(f"Video download error: {e}")
     return None
 
-
+async def download_youtube_piped(url):
+    vid = None
+    import re
+    for p in [r"(?:youtube\.com/(?:shorts|watch|embed)/)([a-zA-Z0-9_-]+)", r"(?:youtu\.be/)([a-zA-Z0-9_-]+)", r"(?:youtube\.com/watch\?v=)([a-zA-Z0-9_-]+)"]:
+        m = re.search(p, url)
+        if m: vid = m.group(1); break
+    if not vid: return None
+    instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.smnz.de"]
+    async with aiohttp.ClientSession() as s:
+        for inst in instances:
+            try:
+                async with s.get(f"{inst}/streams/{vid}", timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    if r.status != 200: continue
+                    data = await r.json()
+                    for fmt in data.get("videoStreams", []):
+                        if fmt.get("container") == "mp4" and fmt.get("url"):
+                            return {"url": fmt["url"], "width": fmt.get("width"), "height": fmt.get("height")}
+                    for fmt in data.get("audioStreams", []):
+                        if fmt.get("container") == "mp4" and fmt.get("url"):
+                            return {"url": fmt["url"], "width": None, "height": None}
+            except:
+                continue
+    return None
 
 async def ask_model(messages, temp=0.8):
     if not client: return "Башмак отдыхает."
@@ -877,13 +899,17 @@ async def handle_message(message: types.Message):
         url_to_download = found_urls[0]
 
     is_video_link = False
-    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download):
+    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download or "youtube.com/" in url_to_download or "youtu.be/" in url_to_download):
         is_video_link = True
 
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
 
-        video_info = await download_video_rapid(url_to_download)
+        is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download
+        if is_youtube:
+            video_info = await download_youtube_piped(url_to_download)
+        if not video_info:
+            video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
             width = video_info.get('width')
