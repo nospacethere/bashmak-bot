@@ -1328,6 +1328,8 @@ async def main():
     ]
     await bot.set_my_commands(main_commands)
 
+    print("Waiting 10s for old instance to shut down...")
+    await asyncio.sleep(10)
     print("Bot started polling...")
     await dp.start_polling(bot)
 
