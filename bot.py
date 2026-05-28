@@ -77,71 +77,59 @@ async def get_all_chat_ids():
     chats_cursor = chats_col.find({}, {'chat_id': 1})
     return [doc['chat_id'] for doc in await chats_cursor.to_list(length=None)]
 
-async def download_video_rapid(url):
-    if not RAPID_KEY: return None
-    api_url = "https://social-download-all-in-one.p.rapidapi.com/v1/social/autolink"
-    headers = {"Content-Type": "application/json", "x-rapidapi-host": "social-download-all-in-one.p.rapidapi.com", "x-rapidapi-key": RAPID_KEY}
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(api_url, json={"url": url}, headers=headers, timeout=30) as resp:
+RAPID_APIS = [
+    {"host": "social-download-all-in-one.p.rapidapi.com", "path": "/v1/social/autolink"},
+    {"host": "social-media-video-downloader.p.rapidapi.com", "path": "/v1/video/download"},
+]
+
+async def call_rapid_api(host, path, url):
+    headers = {"Content-Type": "application/json", "x-rapidapi-host": host, "x-rapidapi-key": RAPID_KEY}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"https://{host}{path}", json={"url": url}, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                    medias = data.get('medias', [])
-                    if not medias:
-                        direct_url = data.get('url') or data.get('video') or data.get('download')
-                        if direct_url:
-                            return {"url": direct_url, "width": None, "height": None}
-                        return None
-
-                    best = None
-                    best_pixels = 0
-                    for m in medias:
-                        m_url = m.get('url')
-                        if not m_url:
-                            continue
-                        ext = m.get('extension', '')
-                        mtype = m.get('type', '')
-                        if ext not in ('mp4', 'mov', 'webm') and mtype != 'video':
-                            continue
-                        w = m.get('width', 0) or 0
-                        h = m.get('height', 0) or 0
-                        pixels = w * h
-                        if pixels > best_pixels:
-                            best_pixels = pixels
-                            best = {"url": m_url, "width": w, "height": h}
-
-                    if best:
-                        return best
-
-                    first_url = medias[0].get('url')
-                    if first_url:
-                        return {"url": first_url, "width": None, "height": None}
-        except Exception as e:
-            print(f"Video download error: {e}")
+                    return await resp.json()
+                print(f"RapidAPI {host} status {resp.status}")
+    except Exception as e:
+        print(f"RapidAPI {host} error: {e}")
     return None
 
-async def download_youtube_piped(url):
-    vid = None
-    import re
-    for p in [r"(?:youtube\.com/(?:shorts|watch|embed)/)([a-zA-Z0-9_-]+)", r"(?:youtu\.be/)([a-zA-Z0-9_-]+)", r"(?:youtube\.com/watch\?v=)([a-zA-Z0-9_-]+)"]:
-        m = re.search(p, url)
-        if m: vid = m.group(1); break
-    if not vid: return None
-    instances = ["https://pipedapi.kavin.rocks", "https://pipedapi.smnz.de"]
-    async with aiohttp.ClientSession() as s:
-        for inst in instances:
-            try:
-                async with s.get(f"{inst}/streams/{vid}", timeout=aiohttp.ClientTimeout(total=15)) as r:
-                    if r.status != 200: continue
-                    data = await r.json()
-                    for fmt in data.get("videoStreams", []):
-                        if fmt.get("container") == "mp4" and fmt.get("url"):
-                            return {"url": fmt["url"], "width": fmt.get("width"), "height": fmt.get("height")}
-                    for fmt in data.get("audioStreams", []):
-                        if fmt.get("container") == "mp4" and fmt.get("url"):
-                            return {"url": fmt["url"], "width": None, "height": None}
-            except:
-                continue
+def extract_video_from_response(data):
+    medias = data.get('medias', [])
+    if not medias:
+        direct_url = data.get('url') or data.get('video') or data.get('download')
+        if direct_url:
+            return {"url": direct_url, "width": None, "height": None}
+        return None
+    best = None
+    best_pixels = 0
+    for m in medias:
+        m_url = m.get('url')
+        if not m_url: continue
+        ext = m.get('extension', '')
+        mtype = m.get('type', '')
+        if ext not in ('mp4', 'mov', 'webm') and mtype != 'video': continue
+        w = m.get('width', 0) or 0
+        h = m.get('height', 0) or 0
+        pixels = w * h
+        if pixels > best_pixels:
+            best_pixels = pixels
+            best = {"url": m_url, "width": w, "height": h}
+    if best: return best
+    first_url = medias[0].get('url')
+    if first_url: return {"url": first_url, "width": None, "height": None}
+    return None
+
+async def download_video_rapid(url):
+    if not RAPID_KEY: return None
+    for attempt in range(3):
+        for api in RAPID_APIS:
+            data = await call_rapid_api(api["host"], api["path"], url)
+            if not data: continue
+            result = extract_video_from_response(data)
+            if result: return result
+        if attempt < 2:
+            await asyncio.sleep(2)
     return None
 
 async def ask_model(messages, temp=0.8):
@@ -899,43 +887,43 @@ async def handle_message(message: types.Message):
         url_to_download = found_urls[0]
 
     is_video_link = False
-    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download or "youtube.com/" in url_to_download or "youtu.be/" in url_to_download):
+    if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download):
         is_video_link = True
 
     if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
 
-        video_info = None
-        is_youtube = "youtube.com/" in url_to_download or "youtu.be/" in url_to_download
-        if is_youtube:
-            video_info = await download_youtube_piped(url_to_download)
-        if not video_info:
-            video_info = await download_video_rapid(url_to_download)
+        video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
             width = video_info.get('width')
             height = video_info.get('height')
-            
-            try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", "Referer": url_to_download}
-                async with aiohttp.ClientSession() as s:
-                    async with s.get(v_url, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as r:
-                        if r.status == 200:
+
+            for retry in range(3):
+                try:
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", "Referer": url_to_download}
+                    async with aiohttp.ClientSession() as s:
+                        async with s.get(v_url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                            if r.status != 200:
+                                print(f"CDN download attempt {retry+1} status {r.status}")
+                                await asyncio.sleep(2)
+                                continue
                             video_content = await r.read()
                             if len(video_content) < 50 * 1024 * 1024:
                                 await message.reply_video(
-                                    BufferedInputFile(video_content, filename="v.mp4"), 
+                                    BufferedInputFile(video_content, filename="v.mp4"),
                                     caption="😼 Стырил",
-                                    width=width, 
+                                    width=width,
                                     height=height
                                 )
                             else:
                                 await message.reply("Видео слишком большое для отправки. 😼")
-                        else:
-                             await message.reply("Не удалось загрузить видео, которое вернул API. 😼")
-            except Exception as e:
-                 print(f"Error sending video: {e}")
-                 await message.reply("Произошла ошибка при отправке видео. 😼")
+                            return
+                except Exception as e:
+                    print(f"CDN download attempt {retry+1} error: {e}")
+                    await asyncio.sleep(2)
+
+            await message.reply("Не удалось загрузить видео, которое вернул API. 😼")
         else:
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
         return
