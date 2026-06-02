@@ -20,6 +20,26 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 # Инициализация
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# Автоудаление сообщений башмака через 10 минут (кроме лидерборда, спинов бота и видео)
+AUTO_DELETE_DELAY = 600
+_SKIP_PREFIXES = ("🏆 Зал славы казино", "🎲 Гемблинг Башмак делает свой ход!")
+
+_orig_send_message = bot.send_message
+_orig_send_video = bot.send_video
+
+async def _auto_delete_send_message(chat_id, text, **kwargs):
+    msg = await _orig_send_message(chat_id, text, **kwargs)
+    if not text.startswith(_SKIP_PREFIXES):
+        asyncio.create_task(_delete_later(msg))
+    return msg
+
+async def _delete_later(msg, delay=AUTO_DELETE_DELAY):
+    await asyncio.sleep(delay)
+    try: await msg.delete()
+    except: pass
+
+bot.send_message = _auto_delete_send_message
 if GROQ_API_KEY:
     client = AsyncGroq(api_key=GROQ_API_KEY)
 else:
