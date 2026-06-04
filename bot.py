@@ -228,6 +228,31 @@ async def cmd_admin_force_bot_action(message: types.Message):
     await force_bot_full_action()
     await message.answer("✅ Башмак отработал все предметы и спины!")
 
+@dp.message(Command("admin_add_points"))
+async def cmd_admin_add_points(message: types.Message, command: CommandObject):
+    if message.from_user.id != ADMIN_ID: return
+    if not command.args:
+        await message.answer("Укажите: /admin_add_points <user_id> <сумма>")
+        return
+    parts = command.args.strip().split()
+    if len(parts) != 2:
+        await message.answer("Нужно 2 аргумента: /admin_add_points <user_id> <сумма>")
+        return
+    try:
+        target_id = int(parts[0])
+        amount = int(parts[1])
+    except ValueError:
+        await message.answer("user_id и сумма должны быть числами")
+        return
+    user_doc = await scores_col.find_one({"user_id": target_id})
+    if not user_doc:
+        await message.answer(f"Игрок с id {target_id} не найден в базе")
+        return
+    await scores_col.update_one({"user_id": target_id}, {"$inc": {"balance": amount}})
+    new_bal = (await scores_col.find_one({"user_id": target_id}))["balance"]
+    name = user_doc.get("name", str(target_id))
+    await message.answer(f"✅ {name}: {amount:+} фишек. Баланс: {new_bal}")
+
 async def force_bot_full_action():
     bot_user = await bot.get_me()
     bot_id = bot_user.id
