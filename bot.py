@@ -84,11 +84,9 @@ ROLES = [{"name": "Гемблинг Башмак", "emoji": "🎰", "prompt": GA
 def calculate_win(dice_value):
     v = dice_value - 1
     reels = [v % 4, (v // 4) % 4, v // 16]
-    is_bar = lambda r: r == 1
     
     if dice_value == 64: return 50
-    elif all(is_bar(r) for r in reels): return 20
-    elif reels[0] == reels[1] == reels[2]: return 10
+    elif reels[0] == reels[1] == reels[2]: return 20
     elif reels[0] == reels[1] or reels[1] == reels[2]: return -1
     else: return -5
 
@@ -683,8 +681,7 @@ async def handle_dice(message: types.Message):
 🏆 ТАБЛИЦА ВЫИГРЫШЕЙ
 
 - 7️⃣7️⃣7️⃣ (Джекпот): +50 фишек
-- BAR-BAR-BAR: +20 фишек
-- Три одинаковых символа: +10 фишек
+- Три одинаковых символа (включая BAR): +20 фишек
 - Два одинаковых символа: -1 фишка
 - Проигрыш: -5 фишек
 
@@ -791,6 +788,8 @@ async def handle_football(message: types.Message):
     user_doc = await scores_col.find_one({"user_id": user_id})
 
     if not user_doc or "golden_boot_active" not in user_doc.get("active_effects", []):
+        if message.from_user.id != (await bot.get_me()).id:
+            await message.reply("Вы не активировали Золотой Бутс. Используйте /use golden_boot сначала. ⚽️")
         return
 
     dice_value = message.dice.value
