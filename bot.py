@@ -54,7 +54,8 @@ inventories_col = db['inventories']
 spin_counts_col = db['spin_counts']
 game_state_col = db['game_state']
 amulets_col = db['amulets']
-chats_col = db['chats'] # Новая коллекция для чатов
+chats_col = db['chats']
+hof_col = db['hall_of_fame']
 
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
@@ -253,6 +254,30 @@ async def cmd_admin_add_points(message: types.Message, command: CommandObject):
     new_bal = (await scores_col.find_one({"user_id": target_id}))["balance"]
     name = user_doc.get("name", str(target_id))
     await message.answer(f"✅ {name}: {amount:+} фишек. Баланс: {new_bal}")
+
+@dp.message(Command("admin_start_season"))
+async def cmd_admin_start_season(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    start_date = datetime.datetime.now(pytz.timezone('Europe/Moscow')).replace(tzinfo=None)
+    season_number = (await hof_col.count_documents({})) + 1
+    await game_state_col.update_one({}, {
+        "$set": {
+            "start_date": start_date,
+            "game_ended": False,
+            "season_number": season_number,
+            "last_daily_reset_date": None
+        }
+    }, upsert=True)
+    await spin_counts_col.delete_many({})
+    schedule_bot_spins()
+    all_ids = await get_all_chat_ids()
+    for cid in all_ids:
+        try:
+            await bot.send_message(cid, f"🎰 Гемблинг Лига Башмака №{season_number} официально открыта!\n\n"
+                                       f"14 дней удачи, риска и больших ставок. Делайте ваши спины! 🎲")
+            await asyncio.sleep(0.2)
+        except: pass
+    await message.answer(f"✅ Сезон №{season_number} запущен!")
 
 async def force_bot_full_action():
     bot_user = await bot.get_me()
@@ -655,9 +680,8 @@ async def handle_dice(message: types.Message):
         return
 
     if not game_state_doc or 'start_date' not in game_state_doc:
-        start_date = datetime.datetime.now(pytz.timezone('Europe/Moscow')).replace(tzinfo=None)
-        await game_state_col.update_one({}, {"$set": {"start_date": start_date}}, upsert=True)
-        print(f"New game season started at {start_date}")
+        await message.reply("🏁 Сезон ещё не запущен. Админ должен запустить его командой /admin_start_season. 🎰")
+        return
 
     user_doc = await scores_col.find_one({'user_id': user_id})
     is_new_user = False
@@ -810,6 +834,8 @@ async def handle_football(message: types.Message):
     gs = await game_state_col.find_one()
     if gs and gs.get("game_ended"):
         return
+    if not gs or 'start_date' not in gs:
+        return
 
     user_doc = await scores_col.find_one({"user_id": user_id})
 
@@ -883,6 +909,27 @@ async def cmd_day(message: types.Message):
 async def cmd_summary(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     await send_gambling_summary(message.chat.id)
+
+@dp.message(Command("hof"))
+async def cmd_hof(message: types.Message, command: CommandObject):
+    total = await hof_col.count_documents({})
+    if total == 0:
+        await message.answer("🏛 Зал славы пока пуст. Первый сезон ещё не завершён!")
+        return
+    if command.args and command.args.strip().isdigit():
+        n = int(command.args.strip())
+    else:
+        n = total
+    season = await hof_col.find_one({"season_number": n})
+    if not season:
+        await message.answer(f"🏛 Сезон №{n} не найден. Всего завершено сезонов: {total}")
+        return
+    players = season.get("top_players", [])
+    text = f"🏛 Гемблинг Лига Башмака №{n}\n\n"
+    for i, p in enumerate(players):
+        medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
+        text += f"{medal} {p['name']}: {p['balance']} фишек\n"
+    await message.answer(text)
 
 async def send_gambling_summary(chat_id):
     history = get_history(chat_id)
@@ -1226,10 +1273,22 @@ async def reset_daily_state():
 
 async def end_game_action():
     print(f"[{datetime.datetime.now()}] Game season of 14 days has ended.")
+    gs = await game_state_col.find_one()
+    season_number = gs.get("season_number", "?") if gs else "?"
     top_text = await get_leaderboard_text()
+
+    cursor = scores_col.find().sort("balance", -1).limit(10)
+    top_players = [{"name": p.get("name", "Anon"), "balance": p.get("balance", 0)} async for p in cursor]
+    await hof_col.insert_one({
+        "season_number": season_number,
+        "ended_at": datetime.datetime.now(pytz.utc),
+        "top_players": top_players
+    })
+    print(f"Saved Hall of Fame for season {season_number}")
+
     announcement = (
-        f"🎉 Игровой сезон окончен! 🎉\n\n"
-        f"14 дней пролетели как один миг! Казино «Гемблинг Башмак» закрывает свои двери... до следующего раза.\n\n"
+        f"🎉 Гемблинг Лига Башмака №{season_number} завершена! 🎉\n\n"
+        f"14 дней пролетели как один миг!\n\n"
         f"А вот и наши легенды, сорвавшие куш:\n{top_text}\n\n"
         f"Игра остановлена — больше нельзя делать ставки и использовать предметы.\n"
         f"Админ может сбросить всё командой /admin_wipe_scores_777, чтобы начать новый сезон. 🎰"
