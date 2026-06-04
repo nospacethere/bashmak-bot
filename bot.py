@@ -60,7 +60,7 @@ ITEMS = {
     "chaos_cube": {"name": "🎲 Кубик Хаоса", "description": "Вычитает случайное число (1-6) у случайного игрока и добавляет вам.", "requires_target": False},
     "madness_coin": {"name": "🌓 Монета Безумия", "description": "Применяет к следующему спину один из двух эффектов (50/50): либо отменяет проигрыш, либо отменяет выигрыш.", "requires_target": False},
     "money_pouch": {"name": "💰 Мешочек мелочи", "description": "Мгновенно дает +10 фишек.", "requires_target": False},
-    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам. За гол вы получаете +10 фишек, за промах -10.", "requires_target": False},
+    "golden_boot": {"name": "⚽ Золотой Бутс", "description": "Запускает мини-игру с ударом по воротам. Попадание +10, промах -10.", "requires_target": False},
     "stone_rain": {"name": "🌧️ Дождь из камней", "description": "Изменяет баланс фишек всех игроков на случайное значение от -5 до 5.", "requires_target": False},
     "leaky_pocket": {"name": "🤏 Дырявый карман", "description": "Попытка украсть 15% фишек у самого богатого игрока. С шансом 30% вы отдадите 15% своих фишек ему.", "requires_target": False},
     "generous_jackpot": {"name": "🎉 Щедрый Джекпот", "description": "Вы получаете +10 фишек, а все остальные игроки — от 1 до 5 фишек.", "requires_target": False},
@@ -295,8 +295,8 @@ async def execute_bot_single_item(item_key):
                             f"Баланс {victim['name']}: {vd.get('balance', 'N/A')}")
 
     elif item_key == "golden_boot":
-        dv = random.randint(1, 6)
-        change = 10 if dv >= 4 else -10
+        dv = random.randint(1, 5)
+        change = 10 if dv in (1, 4, 5) else -10
         await scores_col.update_one({"user_id": bot_id}, {"$inc": {"balance": change}})
         bd = await scores_col.find_one({"user_id": bot_id})
         result = "забивает гол и получает +10" if change > 0 else "промахивается и теряет 10"
@@ -788,12 +788,10 @@ async def handle_football(message: types.Message):
     user_doc = await scores_col.find_one({"user_id": user_id})
 
     if not user_doc or "golden_boot_active" not in user_doc.get("active_effects", []):
-        if message.from_user.id != (await bot.get_me()).id:
-            await message.reply("Вы не активировали Золотой Бутс. Используйте /use golden_boot сначала. ⚽️")
         return
 
     dice_value = message.dice.value
-    change = 10 if dice_value >= 4 else -10
+    change = 10 if dice_value in (1, 4, 5) else -10
 
     await scores_col.update_one(
         {"user_id": user_id},
