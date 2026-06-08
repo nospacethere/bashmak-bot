@@ -961,26 +961,17 @@ async def handle_message(message: types.Message):
     if message.from_user.is_bot or not message.text or message.text.startswith('/') or (message.dice and message.dice.emoji in ['🎰', '⚽']):
         return
 
-    gs = await game_state_col.find_one()
-    if gs and gs.get("game_ended"):
-        return
-
     cid = message.chat.id
     await chats_col.update_one({'chat_id': cid}, {'$set': {'last_seen': datetime.datetime.now(pytz.utc)}}, upsert=True)
-    history = get_history(cid)
     text = message.text
-    
+
     url_pattern = r'https?://[^\s]+'
     found_urls = re.findall(url_pattern, text)
     url_to_download = None
     if found_urls:
         url_to_download = found_urls[0]
 
-    is_video_link = False
     if url_to_download and ("instagram.com/" in url_to_download or "tiktok.com/" in url_to_download or "vm.tiktok.com/" in url_to_download):
-        is_video_link = True
-
-    if is_video_link:
         await bot.send_chat_action(cid, "upload_video")
 
         video_info = await download_video_rapid(url_to_download)
@@ -1016,6 +1007,10 @@ async def handle_message(message: types.Message):
             await message.reply("Не удалось загрузить видео, которое вернул API. 😼")
         else:
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
+        return
+
+    gs = await game_state_col.find_one()
+    if gs and gs.get("game_ended"):
         return
 
     history.append({'role': 'user', 'name': message.from_user.first_name, 'content': text})
