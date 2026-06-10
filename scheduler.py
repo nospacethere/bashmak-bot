@@ -1,6 +1,6 @@
 import asyncio, datetime, random, pytz
 import config
-from utils import get_all_chat_ids, get_leaderboard_text, broadcast_message, send_gambling_summary, handle_vampire_amulet
+from utils import get_all_chat_ids, get_leaderboard_text, broadcast_message, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id
 from items import execute_bot_single_item
 
 def schedule_bot_spins():
@@ -25,9 +25,9 @@ async def execute_bot_spin():
     if spin_count >= 2:
         print(f"[{datetime.datetime.now()}] Bot has already spun twice today.")
         return
-    all_ids = await get_all_chat_ids()
-    if not all_ids:
-        print(f"[{datetime.datetime.now()}] No active chats for bot spin.")
+    casino_id = await get_casino_chat_id()
+    if not casino_id:
+        print(f"[{datetime.datetime.now()}] No casino chat set for bot spin.")
         return
 
     dice_value = random.randint(1, 64)
@@ -92,7 +92,7 @@ async def execute_bot_spin():
                         f"Кот-крупье {result_text}\n"
                         f"Теперь его баланс: {new_balance} фишек. 😼")
 
-    for cid in all_ids:
+    for cid in [casino_id]:
         try:
             await config.bot.send_message(cid, message_text)
             await asyncio.sleep(0.3)
@@ -133,10 +133,12 @@ async def distribute_daily_items_and_announce():
                 f"Проверьте свой /inventory, чтобы узнать, что вам досталось! 🎰",
             )
             await asyncio.sleep(0.3)
-    await broadcast_message(
-        f"🎁 Башмак раздал ежедневные предметы! Проверьте /inventory, чтобы узнать, что выпало вам! 🎰",
-        delay=0.5,
-    )
+    casino_id = await get_casino_chat_id()
+    if casino_id:
+        await config.bot.send_message(
+            casino_id,
+            f"🎁 Башмак раздал ежедневные предметы! Проверьте /inventory, чтобы узнать, что выпало вам! 🎰",
+        )
 
 async def run_chaos_event():
     print(f"[{datetime.datetime.now()}] Running chaos event.")
@@ -165,7 +167,9 @@ async def run_chaos_event():
             else:
                 results.append(f"{p['name']}: 0 фишек (и так пусто)")
     msg = "🌪️ Парад Хаоса начался!\n\n" + "\n".join(results) + "\n\nПусть начнется безумие! Проверьте свой /inventory. 🎰"
-    await broadcast_message(msg, delay=0.5)
+    casino_id = await get_casino_chat_id()
+    if casino_id:
+        await config.bot.send_message(casino_id, msg)
     await config.game_state_col.update_one({}, {"$set": {"chaos_cube_event_done": True}})
 
 async def reset_daily_state():
@@ -200,7 +204,9 @@ async def end_game_action():
         f"Игра остановлена — больше нельзя делать ставки и использовать предметы.\n"
         f"Админ может сбросить всё командой /admin_wipe_scores_777, чтобы начать новый сезон. 🎰"
     )
-    await broadcast_message(announcement, delay=0.5)
+    casino_id = await get_casino_chat_id()
+    if casino_id:
+        await config.bot.send_message(casino_id, announcement)
     await config.game_state_col.update_one({}, {"$set": {"game_ended": True}}, upsert=True)
     print(f"[{datetime.datetime.now()}] Game marked as ended. Data preserved for admin wipe.")
 
@@ -242,12 +248,12 @@ async def scheduler():
             last_reset = gs.get("last_daily_reset_date")
             if last_reset is None or last_reset != today_str:
                 print(f"[{datetime.datetime.now()}] New day detected ({today_str}). Previous reset: {last_reset}.")
-                all_cids = await get_all_chat_ids()
-                for cid in all_cids:
+                casino_id = await get_casino_chat_id()
+                if casino_id:
                     try:
-                        await send_gambling_summary(cid)
+                        await send_gambling_summary(casino_id)
                     except Exception as e:
-                        print(f"Failed to send summary to {cid}: {e}")
+                        print(f"Failed to send summary to {casino_id}: {e}")
                 await reset_daily_state()
                 await distribute_daily_items_and_announce()
                 for cid in list(config.user_history.keys()):

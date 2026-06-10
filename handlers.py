@@ -4,7 +4,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.enums import ChatType
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
-from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet
+from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id
 from items import use_item_logic
 
 WELCOME_TEXT = """😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
@@ -50,6 +50,8 @@ WELCOME_TEXT = """😼 Добро пожаловать в подпольное �
 
 @dp.message(Command("inventory"))
 async def cmd_inventory(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     user_id = message.from_user.id
     inv_doc = await inventories_col.find_one({"user_id": user_id})
     if not inv_doc or not inv_doc.get("items"):
@@ -67,12 +69,16 @@ async def cmd_inventory(message: types.Message):
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("use_item:"))
 async def process_use_item_callback(callback_query: CallbackQuery):
+    casino_id = await get_casino_chat_id()
+    if casino_id and callback_query.message.chat.id != casino_id: return
     item_key = callback_query.data.split(":")[1]
     await callback_query.answer(f"Используем {ITEMS[item_key]['name']}...")
     await use_item_logic(callback_query.from_user, item_key, callback_query.message)
 
 @dp.message(Command("get_item"))
 async def cmd_get_item(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     user_id = message.from_user.id
     gs = await game_state_col.find_one()
     if gs and gs.get("game_ended"):
@@ -98,6 +104,8 @@ async def cmd_get_item(message: types.Message):
 
 @dp.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     if command.args is None:
         await message.reply("Напишите предмет, который хотите использовать, например: `/use money_pouch`")
         return
@@ -106,6 +114,8 @@ async def cmd_use(message: types.Message, command: CommandObject):
 
 @dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
 async def handle_dice(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     await chats_col.update_one({'chat_id': message.chat.id}, {'$set': {'last_seen': datetime.datetime.now(pytz.utc)}}, upsert=True)
     user_id = message.from_user.id
     user_name = message.from_user.first_name
@@ -195,6 +205,8 @@ async def handle_dice(message: types.Message):
 
 @dp.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
 async def handle_football(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     user_id = message.from_user.id
     gs = await game_state_col.find_one()
     if gs and gs.get("game_ended"):
@@ -227,11 +239,15 @@ async def handle_football(message: types.Message):
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     text = await get_leaderboard_text()
     await message.answer(text)
 
 @dp.message(Command("day"))
 async def cmd_day(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
     gs = await game_state_col.find_one()
     if not gs or 'start_date' not in gs:
         await message.answer("🗓️ Сезон ещё не запущен. Ждите команды крупье!")

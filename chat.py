@@ -3,7 +3,7 @@ from aiogram import types
 from aiogram.enums import ChatType
 from aiogram.types import BufferedInputFile
 from config import bot, dp, scores_col, chats_col, game_state_col, user_history
-from utils import get_history, ask_model, download_video_rapid
+from utils import get_history, ask_model, download_video_rapid, get_casino_chat_id
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -54,6 +54,10 @@ async def handle_message(message: types.Message):
             await message.reply("Не удалось загрузить видео, которое вернул API. 😼")
         else:
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
+        return
+
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id:
         return
 
     gs = await game_state_col.find_one()

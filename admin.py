@@ -85,6 +85,12 @@ async def cmd_admin_add_points(message: types.Message, command: CommandObject):
     name = user_doc.get("name", str(target_id))
     await message.answer(f"✅ {name}: {amount:+} фишек. Баланс: {new_bal}")
 
+@dp.message(Command("admin_set_casino_chat"))
+async def cmd_admin_set_casino_chat(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await game_state_col.update_one({}, {"$set": {"casino_chat_id": message.chat.id}}, upsert=True)
+    await message.answer(f"✅ Этот чат ({message.chat.id}) назначен игровым казино!")
+
 @dp.message(Command("admin_start_season"))
 async def cmd_admin_start_season(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
@@ -98,6 +104,7 @@ async def cmd_admin_start_season(message: types.Message):
                 "game_ended": False,
                 "season_number": season_number,
                 "last_daily_reset_date": None,
+                "casino_chat_id": message.chat.id,
             }
         },
         upsert=True,
