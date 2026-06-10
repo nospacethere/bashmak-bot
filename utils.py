@@ -1,7 +1,13 @@
 import asyncio, datetime, random, re, aiohttp
+from collections import deque
 from aiogram import types
 from aiogram.types import BufferedInputFile
 from config import bot, scores_col, chats_col, amulets_col, user_history, RAPID_KEY, RAPID_APIS, client, SKIP_DELETE_PREFIXES, GAMBLING_SHOE_PROMPT
+
+def get_history(chat_id: int):
+    if chat_id not in user_history:
+        user_history[chat_id] = deque(maxlen=100)
+    return user_history[chat_id]
 
 def calculate_win(dice_value: int) -> int:
     if dice_value == 64: return 50

@@ -1,5 +1,4 @@
 import os, datetime, pytz
-from collections import deque
 from aiogram import Bot, Dispatcher
 from groq import AsyncGroq
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -53,7 +52,4 @@ bot_spin_time_1 = None
 bot_spin_time_2 = None
 _amulet_cleanup_run_minute = -1
 
-def get_history(chat_id: int):
-    if chat_id not in user_history:
-        user_history[chat_id] = deque(maxlen=100)
-    return user_history[chat_id]
+
