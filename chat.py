@@ -23,8 +23,6 @@ async def handle_message(message: types.Message):
         video_info = await download_video_rapid(url_to_download)
         if video_info:
             v_url = video_info['url']
-            width = video_info.get('width')
-            height = video_info.get('height')
             for retry in range(3):
                 try:
                     headers = {
@@ -42,8 +40,6 @@ async def handle_message(message: types.Message):
                                 await message.reply_video(
                                     BufferedInputFile(video_content, filename="v.mp4"),
                                     caption="😼 Стырил",
-                                    width=width,
-                                    height=height,
                                 )
                             else:
                                 await message.reply("Видео слишком большое для отправки. 😼")
