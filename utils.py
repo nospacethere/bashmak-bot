@@ -1,7 +1,5 @@
-import asyncio, datetime, random, re, aiohttp
+import asyncio, datetime, aiohttp
 from collections import deque
-from aiogram import types
-from aiogram.types import BufferedInputFile
 from config import bot, scores_col, chats_col, amulets_col, game_state_col, user_history, RAPID_KEY, RAPID_APIS, client, SKIP_DELETE_PREFIXES, GAMBLING_SHOE_PROMPT
 
 def get_history(chat_id: int):

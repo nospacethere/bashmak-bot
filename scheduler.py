@@ -1,6 +1,6 @@
 import asyncio, datetime, random, pytz
 import config
-from utils import get_all_chat_ids, get_leaderboard_text, broadcast_message, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id
+from utils import get_leaderboard_text, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id, calculate_win
 from items import execute_bot_single_item
 
 def schedule_bot_spins():
@@ -31,7 +31,6 @@ async def execute_bot_spin():
         return
 
     dice_value = random.randint(1, 64)
-    from utils import calculate_win
     change = calculate_win(dice_value)
 
     bot_doc = await config.scores_col.find_one({'user_id': bot_id})

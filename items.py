@@ -1,8 +1,7 @@
 import asyncio, datetime, random, pytz
 from aiogram import types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from config import bot, scores_col, inventories_col, amulets_col, game_state_col, ITEMS, ADMIN_ID
-from utils import get_all_chat_ids, broadcast_message, handle_vampire_amulet, format_effects_text
+from config import bot, scores_col, inventories_col, amulets_col, game_state_col, ITEMS
+from utils import get_all_chat_ids, broadcast_message, handle_vampire_amulet
 
 async def execute_bot_single_item(item_key: str):
     bot_user = await bot.get_me()

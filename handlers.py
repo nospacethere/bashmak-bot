@@ -1,7 +1,6 @@
-import asyncio, datetime, random, pytz
+import datetime, random, pytz
 from aiogram import types
 from aiogram.filters import Command, CommandObject
-from aiogram.enums import ChatType
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
 from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id
