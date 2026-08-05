@@ -1,4 +1,4 @@
-import asyncio, datetime, aiohttp, hashlib, random, pytz
+import asyncio, datetime, aiohttp, hashlib, random, re, pytz
 from collections import deque
 from config import (bot, scores_col, chats_col, amulets_col, game_state_col, user_history,
                     RAPID_KEY, RAPID_APIS, client, SKIP_DELETE_PREFIXES, GAMBLING_SHOE_PROMPT,
@@ -230,6 +230,21 @@ async def generate_detailed_horoscope(name: str, query: str, sign: str):
     )
     return await ask_model([{"role": "user", "content": prompt}], temp=1.0)
 
+async def get_short_horoscope(sign: str, rus: str):
+    today = datetime.datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
+    key = f"short:{sign}:{today}"
+    if key in horoscope_cache:
+        return horoscope_cache[key]
+    data = await fetch_horoscope(sign)
+    desc = data.get("description", "")
+    short = await ask_model([{"role": "user", "content":
+        f"Сократи этот гороскоп до ОДНОГО короткого предложения (макс 15 слов), сохрани суть и мистический тон. Гороскоп для {rus}: {desc}"}], temp=0.7)
+    if not short or short.startswith("Башмак") or len(short) > 200:
+        parts = re.split(r'(?<=[.!?])\s+', desc.strip())
+        short = parts[0] if parts else desc
+    horoscope_cache[key] = short
+    return short
+
 def deadlock_fortune(user_id: int, date_str: str):
     seed = int(hashlib.md5(f"{user_id}:{date_str}".encode()).hexdigest(), 16) % 101
     if seed >= 70:
@@ -266,14 +281,14 @@ async def build_horoscope_message():
         if sign not in groups:
             continue
         members = groups[sign]
-        data = await fetch_horoscope(sign)
-        desc = data.get("description", "")
-        lucky = data.get("lucky_number")
         emj = ZODIAC_EMOJI.get(sign, "")
         rus = ZODIAC_RUS.get(sign, sign)
+        short = await get_short_horoscope(sign, rus)
+        data = await fetch_horoscope(sign)
+        lucky = data.get("lucky_number")
         names_str = " & ".join(nm for nm, _ in members)
         extra = f" Счастливое число: {lucky}." if lucky else ""
-        block = f"**{names_str} {emj} ({rus}):**\n{desc}{extra}"
+        block = f"**{names_str} {emj} ({rus}):**\n{short}{extra}"
         dl_lines = []
         for nm, uid in members:
             if nm in DEADLOCK_PLAYERS:
