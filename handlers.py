@@ -3,7 +3,7 @@ from aiogram import types
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
-from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id
+from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, generate_detailed_horoscope, get_zodiac
 from items import use_item_logic
 
 WELCOME_TEXT = """😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
@@ -279,3 +279,16 @@ async def cmd_hof(message: types.Message, command: CommandObject):
         medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i + 1}."
         text += f"{medal} {p['name']}: {p['balance']} фишек\n"
     await message.answer(text)
+
+@dp.message(Command("horoscope"))
+async def cmd_horoscope(message: types.Message):
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id: return
+    name = message.from_user.first_name
+    sign = await get_zodiac(message.from_user.id, name)
+    if not sign:
+        await message.reply("🔮 У тебя пока нет знака зодиака. Попроси админа выдать его!")
+        return
+    await bot.send_chat_action(message.chat.id, "typing")
+    reply = await generate_detailed_horoscope(name, "покажи мой полный гороскоп на сегодня", sign)
+    await message.reply(reply)

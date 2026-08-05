@@ -45,11 +45,49 @@ RAPID_APIS = [
 GAMBLING_SHOE_PROMPT = "Ты — Гемблинг Башмак, азартный и рисковый кот. Весь мир для тебя — казино. Говори об удаче, ставках, риске и джекпотах. Используй сленг казино (фишки, олл-ин, джекпот, ставка, спин) и всегда будь готов поставить всё на кон. Ты немного циничен и саркастичен."
 ROLES = [{"name": "Гемблинг Башмак", "emoji": "🎰", "prompt": GAMBLING_SHOE_PROMPT}]
 
-SKIP_DELETE_PREFIXES = ("🏆 Зал славы казино", "🎲 Гемблинг Башмак делает свой ход!", "😼")
+SKIP_DELETE_PREFIXES = ("🏆 Зал славы казино", "🎲 Гемблинг Башмак делает свой ход!", "😼", "🌠")
 
 user_history: dict = {}
 bot_spin_time_1 = None
 bot_spin_time_2 = None
 _amulet_cleanup_run_minute = -1
+
+HOROSCOPE_API_URL = "https://aztro.sameerkumar.website/"
+ZODIAC_RUS = {
+    "aries": "Овен", "taurus": "Телец", "gemini": "Близнецы",
+    "cancer": "Рак", "leo": "Лев", "virgo": "Дева",
+    "libra": "Весы", "scorpio": "Скорпион", "sagittarius": "Стрелец",
+    "capricorn": "Козерог", "aquarius": "Водолей", "pisces": "Рыбы",
+}
+ZODIAC_EMOJI = {
+    "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋",
+    "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏",
+    "sagittarius": "♐", "capricorn": "♑", "aquarius": "♒", "pisces": "♓",
+}
+PLAYER_ZODIACS = {
+    "Danil": "gemini",
+    "Ilia": "leo",
+    "Move": "pisces",
+    "OneOne": "libra",
+    "ayanami": "gemini",
+}
+DEADLOCK_PLAYERS = {"Danil", "Move", "OneOne", "ayanami"}
+MYSTIC_PREFIXES = [
+    ("🔮", "Таинственный Оракул", "Оракул шепчет"),
+    ("🌙", "Лунный Странник", "Лунный Странник вещает"),
+    ("⭐", "Звёздный Глашатай", "Звёздный Глашатай знает"),
+    ("🃏", "Кармический Крупье", "Кармический Крупье раздаёт"),
+    ("🔭", "Небесный Наблюдатель", "Небесный Наблюдатель видит"),
+]
+MYSTIC_SIGNATURES = [
+    "Судьба уже бросила кости…",
+    "Карты лягут так, как суждено.",
+    "Звёзды не лгут, но выбор за тобой.",
+    "Пусть твоя звезда горит ярче.",
+    "Вселенная уже всё решила.",
+]
+
+horoscope_cache: dict = {}
+horoscope_msg_id = None
 
 

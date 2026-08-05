@@ -1,8 +1,8 @@
 import asyncio, datetime, pytz
 from aiogram import types
 from aiogram.filters import Command, CommandObject
-from config import bot, dp, ADMIN_ID, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, chats_col, hof_col, ITEMS
-from scheduler import schedule_bot_spins, distribute_daily_items_and_announce, execute_bot_spin
+from config import bot, dp, ADMIN_ID, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, chats_col, hof_col, ITEMS, ZODIAC_RUS, PLAYER_ZODIACS
+from scheduler import schedule_bot_spins, distribute_daily_items_and_announce, execute_bot_spin, send_daily_horoscopes
 from utils import get_all_chat_ids, broadcast_message, send_gambling_summary
 from items import execute_bot_single_item
 from config import user_history
@@ -90,6 +90,44 @@ async def cmd_admin_set_casino_chat(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
     await game_state_col.update_one({}, {"$set": {"casino_chat_id": message.chat.id}}, upsert=True)
     await message.answer(f"✅ Этот чат ({message.chat.id}) назначен игровым казино!")
+
+@dp.message(Command("admin_start_horoscope"))
+async def cmd_admin_start_horoscope(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await game_state_col.update_one({}, {"$set": {"horoscope_enabled": True}}, upsert=True)
+    await message.answer("🔮 Гороскоп включён! Сейчас выдам на сегодня...")
+    await send_daily_horoscopes()
+    today = datetime.datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
+    await game_state_col.update_one({}, {"$set": {f"horoscope_done_{today}": True}})
+
+@dp.message(Command("admin_stop_horoscope"))
+async def cmd_admin_stop_horoscope(message: types.Message):
+    if message.from_user.id != ADMIN_ID: return
+    await game_state_col.update_one({}, {"$set": {"horoscope_enabled": False}}, upsert=True)
+    await message.answer("🌙 Гороскоп отключён.")
+
+@dp.message(Command("admin_set_zodiac"))
+async def cmd_admin_set_zodiac(message: types.Message, command: CommandObject):
+    if message.from_user.id != ADMIN_ID: return
+    if not command.args:
+        await message.answer("Укажите: /admin_set_zodiac <имя> <знак>")
+        return
+    parts = command.args.strip().split()
+    if len(parts) != 2:
+        await message.answer("Нужно 2 аргумента: /admin_set_zodiac <имя> <знак>")
+        return
+    name, sign_rus = parts[0], parts[1]
+    sign_eng = None
+    for eng, rus in ZODIAC_RUS.items():
+        if rus.lower() == sign_rus.lower():
+            sign_eng = eng
+            break
+    if not sign_eng:
+        await message.answer("Знак не распознан. Доступные: " + ", ".join(ZODIAC_RUS.values()))
+        return
+    res = await scores_col.update_many({"name": name}, {"$set": {"zodiac": sign_eng}})
+    PLAYER_ZODIACS[name] = sign_eng
+    await message.answer(f"✅ {name} → {ZODIAC_RUS[sign_eng]} (обновлено игроков: {res.modified_count})")
 
 @dp.message(Command("admin_start_season"))
 async def cmd_admin_start_season(message: types.Message):

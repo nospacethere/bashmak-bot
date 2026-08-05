@@ -1,6 +1,6 @@
 import asyncio, datetime, random, pytz
 import config
-from utils import get_leaderboard_text, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id, calculate_win
+from utils import get_leaderboard_text, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id, calculate_win, build_horoscope_message
 from items import execute_bot_single_item
 
 def schedule_bot_spins():
@@ -209,6 +209,20 @@ async def end_game_action():
     await config.game_state_col.update_one({}, {"$set": {"game_ended": True}}, upsert=True)
     print(f"[{datetime.datetime.now()}] Game marked as ended. Data preserved for admin wipe.")
 
+async def send_daily_horoscopes():
+    gs = await config.game_state_col.find_one()
+    if not gs or not gs.get("horoscope_enabled"):
+        return
+    casino_id = await get_casino_chat_id()
+    if not casino_id:
+        return
+    text = await build_horoscope_message()
+    if not text:
+        return
+    msg = await config.bot.send_message(casino_id, text)
+    config.horoscope_msg_id = msg.message_id
+    print(f"[{datetime.datetime.now()}] Daily horoscope sent to {casino_id}")
+
 async def scheduler():
     print("Scheduler starting...")
     try:
@@ -221,6 +235,15 @@ async def scheduler():
             now_moscow = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
             today_str = now_moscow.date().isoformat()
             gs = await config.game_state_col.find_one()
+
+            horoscope_key = f"horoscope_done_{today_str}"
+            if gs and gs.get("horoscope_enabled") and now_moscow.hour == 9 and not gs.get(horoscope_key):
+                print(f"[{datetime.datetime.now()}] Triggering daily horoscope.")
+                try:
+                    await send_daily_horoscopes()
+                    await config.game_state_col.update_one({}, {"$set": {horoscope_key: True}})
+                except Exception as e:
+                    print(f"Horoscope send failed: {e}")
 
             if gs and gs.get("game_ended"):
                 await asyncio.sleep(3600)
