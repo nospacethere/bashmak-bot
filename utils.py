@@ -238,10 +238,10 @@ async def get_short_horoscope(sign: str, rus: str):
     data = await fetch_horoscope(sign)
     desc = data.get("description", "")
     short = await ask_model([{"role": "user", "content":
-        f"Сократи этот гороскоп до ОДНОГО короткого предложения (макс 15 слов), сохрани суть и мистический тон. Гороскоп для {rus}: {desc}"}], temp=0.7)
-    if not short or short.startswith("Башмак") or len(short) > 200:
+        f"Сократи этот гороскоп до ДВУХ коротких предложений (макс 15 слов на предложение), сохрани суть и мистический тон. Гороскоп для {rus}: {desc}"}], temp=0.7)
+    if not short or short.startswith("Башмак") or len(short) > 300:
         parts = re.split(r'(?<=[.!?])\s+', desc.strip())
-        short = parts[0] if parts else desc
+        short = " ".join(parts[:2]) if len(parts) > 1 else (parts[0] if parts else desc)
     horoscope_cache[key] = short
     return short
 
