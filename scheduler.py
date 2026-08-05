@@ -1,6 +1,6 @@
 import asyncio, datetime, random, pytz
 import config
-from utils import get_leaderboard_text, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id, calculate_win, build_horoscope_message
+from utils import get_leaderboard_text, send_gambling_summary, handle_vampire_amulet, get_casino_chat_id, get_horoscope_chat_id, calculate_win, build_horoscope_message
 from items import execute_bot_single_item
 
 def schedule_bot_spins():
@@ -213,15 +213,17 @@ async def send_daily_horoscopes():
     gs = await config.game_state_col.find_one()
     if not gs or not gs.get("horoscope_enabled"):
         return
-    casino_id = await get_casino_chat_id()
-    if not casino_id:
+    target = await get_horoscope_chat_id()
+    if not target:
+        print(f"[{datetime.datetime.now()}] No horoscope chat set, skipping.")
         return
     text = await build_horoscope_message()
     if not text:
+        print(f"[{datetime.datetime.now()}] Horoscope build returned nothing.")
         return
-    msg = await config.bot.send_message(casino_id, text)
+    msg = await config.bot.send_message(target, text)
     config.horoscope_msg_id = msg.message_id
-    print(f"[{datetime.datetime.now()}] Daily horoscope sent to {casino_id}")
+    print(f"[{datetime.datetime.now()}] Daily horoscope sent to {target}")
 
 async def scheduler():
     print("Scheduler starting...")

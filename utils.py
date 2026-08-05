@@ -14,6 +14,12 @@ async def get_casino_chat_id():
     gs = await game_state_col.find_one()
     return gs.get("casino_chat_id") if gs else None
 
+async def get_horoscope_chat_id():
+    gs = await game_state_col.find_one()
+    if gs and gs.get("horoscope_chat_id"):
+        return gs["horoscope_chat_id"]
+    return await get_casino_chat_id()
+
 def calculate_win(dice_value: int) -> int:
     if dice_value == 64: return 50
     v = dice_value - 1

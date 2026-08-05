@@ -2,9 +2,8 @@ import asyncio, datetime, re, aiohttp, pytz
 from aiogram import types
 from aiogram.enums import ChatType
 from aiogram.types import BufferedInputFile
-import config
-from config import bot, dp, scores_col, chats_col, game_state_col, user_history, PLAYER_ZODIACS
-from utils import get_history, ask_model, download_video_rapid, get_casino_chat_id, generate_detailed_horoscope, get_zodiac
+from config import bot, dp, scores_col, chats_col, game_state_col, user_history
+from utils import get_history, ask_model, download_video_rapid, get_casino_chat_id, get_horoscope_chat_id, generate_detailed_horoscope, get_zodiac
 
 @dp.message()
 async def handle_message(message: types.Message):
@@ -53,19 +52,22 @@ async def handle_message(message: types.Message):
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
         return
 
-    casino_id = await get_casino_chat_id()
-    if casino_id and message.chat.id != casino_id:
-        return
+    bot_obj = await bot.get_me()
 
-    if (config.horoscope_msg_id and message.reply_to_message
-            and message.reply_to_message.message_id == config.horoscope_msg_id):
+    if message.reply_to_message and message.reply_to_message.from_user.id == bot_obj.id:
         name = message.from_user.first_name
         sign = await get_zodiac(message.from_user.id, name)
         if sign:
-            await bot.send_chat_action(cid, "typing")
-            reply = await generate_detailed_horoscope(name, text, sign)
-            await message.reply(reply)
-            return
+            hchat = await get_horoscope_chat_id()
+            if hchat and message.chat.id == hchat:
+                await bot.send_chat_action(cid, "typing")
+                reply = await generate_detailed_horoscope(name, text, sign)
+                await message.reply(reply)
+                return
+
+    casino_id = await get_casino_chat_id()
+    if casino_id and message.chat.id != casino_id:
+        return
 
     gs = await game_state_col.find_one()
     if gs and gs.get("game_ended"):

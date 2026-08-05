@@ -94,11 +94,18 @@ async def cmd_admin_set_casino_chat(message: types.Message):
 @dp.message(Command("admin_start_horoscope"))
 async def cmd_admin_start_horoscope(message: types.Message):
     if message.from_user.id != ADMIN_ID: return
-    await game_state_col.update_one({}, {"$set": {"horoscope_enabled": True}}, upsert=True)
+    await game_state_col.update_one(
+        {},
+        {"$set": {"horoscope_enabled": True, "horoscope_chat_id": message.chat.id}},
+        upsert=True,
+    )
     await message.answer("🔮 Гороскоп включён! Сейчас выдам на сегодня...")
-    await send_daily_horoscopes()
-    today = datetime.datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
-    await game_state_col.update_one({}, {"$set": {f"horoscope_done_{today}": True}})
+    try:
+        await send_daily_horoscopes()
+        today = datetime.datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
+        await game_state_col.update_one({}, {"$set": {f"horoscope_done_{today}": True}})
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка при отправке гороскопа: {e}")
 
 @dp.message(Command("admin_stop_horoscope"))
 async def cmd_admin_stop_horoscope(message: types.Message):

@@ -3,7 +3,7 @@ from aiogram import types
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
-from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, generate_detailed_horoscope, get_zodiac
+from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, get_horoscope_chat_id, generate_detailed_horoscope, get_zodiac
 from items import use_item_logic
 
 WELCOME_TEXT = """😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
@@ -282,8 +282,8 @@ async def cmd_hof(message: types.Message, command: CommandObject):
 
 @dp.message(Command("horoscope"))
 async def cmd_horoscope(message: types.Message):
-    casino_id = await get_casino_chat_id()
-    if casino_id and message.chat.id != casino_id: return
+    hchat = await get_horoscope_chat_id()
+    if hchat and message.chat.id != hchat: return
     name = message.from_user.first_name
     sign = await get_zodiac(message.from_user.id, name)
     if not sign:
