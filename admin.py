@@ -99,11 +99,9 @@ async def cmd_admin_start_horoscope(message: types.Message):
         {"$set": {"horoscope_enabled": True, "horoscope_chat_id": message.chat.id}},
         upsert=True,
     )
-    await message.answer("🔮 Гороскоп включён! Сейчас выдам на сегодня...")
+    await message.answer("🔮 Выдаю гороскоп на сегодня...")
     try:
         await send_daily_horoscopes()
-        today = datetime.datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
-        await game_state_col.update_one({}, {"$set": {f"horoscope_done_{today}": True}})
     except Exception as e:
         await message.answer(f"⚠️ Ошибка при отправке гороскопа: {e}")
 

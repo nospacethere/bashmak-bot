@@ -238,15 +238,6 @@ async def scheduler():
             today_str = now_moscow.date().isoformat()
             gs = await config.game_state_col.find_one()
 
-            horoscope_key = f"horoscope_done_{today_str}"
-            if gs and gs.get("horoscope_enabled") and now_moscow.hour == 9 and not gs.get(horoscope_key):
-                print(f"[{datetime.datetime.now()}] Triggering daily horoscope.")
-                try:
-                    await send_daily_horoscopes()
-                    await config.game_state_col.update_one({}, {"$set": {horoscope_key: True}})
-                except Exception as e:
-                    print(f"Horoscope send failed: {e}")
-
             if gs and gs.get("game_ended"):
                 await asyncio.sleep(3600)
                 continue
