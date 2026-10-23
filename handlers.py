@@ -3,7 +3,7 @@ from aiogram import types
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
-from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, get_horoscope_chat_id, build_horoscope_message
+from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, get_horoscope_chat_id, build_horoscope_message, build_work_schedule_message
 from items import use_item_logic
 
 WELCOME_TEXT = """😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
@@ -46,6 +46,10 @@ WELCOME_TEXT = """😼 Добро пожаловать в подпольное �
 
 Да начнутся игры! Делай свою первую ставку. 🎰
 """
+
+@dp.message(Command("work"))
+async def cmd_work(message: types.Message):
+    await message.answer(build_work_schedule_message(), parse_mode="HTML")
 
 @dp.message(Command("inventory"))
 async def cmd_inventory(message: types.Message):

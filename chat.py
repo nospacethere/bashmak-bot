@@ -2,6 +2,7 @@ import asyncio, datetime, re, aiohttp, pytz
 from aiogram import types
 from aiogram.enums import ChatType
 from aiogram.types import BufferedInputFile
+from video import get_video_dimensions
 from config import bot, dp, scores_col, chats_col, game_state_col, user_history
 from utils import get_history, ask_model, download_video_rapid, get_casino_chat_id, get_horoscope_chat_id, generate_detailed_horoscope, get_zodiac
 
@@ -37,9 +38,11 @@ async def handle_message(message: types.Message):
                                 continue
                             video_content = await r.read()
                             if len(video_content) < 50 * 1024 * 1024:
+                                dimensions = await asyncio.to_thread(get_video_dimensions, video_content)
                                 await message.reply_video(
                                     BufferedInputFile(video_content, filename="v.mp4"),
                                     caption="😼 Стырил",
+                                    **dimensions,
                                 )
                             else:
                                 await message.reply("Видео слишком большое для отправки. 😼")

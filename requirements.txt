@@ -4,3 +4,4 @@ aiohttp
 pytz
 motor
 dnspython
+av>=17.1.0,<18

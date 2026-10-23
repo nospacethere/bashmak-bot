@@ -5,6 +5,32 @@ from config import (bot, scores_col, chats_col, amulets_col, game_state_col, use
                     HOROSCOPE_API_URL, ZODIAC_RUS, ZODIAC_EMOJI, PLAYER_ZODIACS, DEADLOCK_PLAYERS,
                     MYSTIC_PREFIXES, MYSTIC_SIGNATURES, horoscope_cache)
 
+def build_work_schedule_message(today=None) -> str:
+    if today is None:
+        today = datetime.datetime.now(pytz.timezone("Europe/Moscow")).date()
+    # 23 October 2026 is the first day off in the repeating 2/2 cycle.
+    first_day_off = datetime.date(2026, 10, 23)
+    weekdays = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+    end = today + datetime.timedelta(days=19)
+    lines = [
+        "📅 <b>Рабочий график · 2/2</b>",
+        f"{today:%d.%m.%Y} — {end:%d.%m.%Y}",
+        "🟢 Выходной · 🔴 Работа",
+        "",
+    ]
+    for offset in range(20):
+        day = today + datetime.timedelta(days=offset)
+        if offset and day.weekday() == 0:
+            lines.append("")
+        is_day_off = (day - first_day_off).days % 4 < 2
+        status = "🟢 Выходной" if is_day_off else "🔴 Работа"
+        line = f"{day:%d.%m} · {weekdays[day.weekday()]} — {status}"
+        if offset == 0:
+            line = f"<b>{line} ← сегодня</b>"
+        lines.append(line)
+    lines.extend(["", "🕒 Даты по московскому времени"])
+    return "\n".join(lines)
+
 def get_history(chat_id: int):
     if chat_id not in user_history:
         user_history[chat_id] = deque(maxlen=100)

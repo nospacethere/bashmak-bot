@@ -31,6 +31,7 @@ async def main():
     await endpoint.start()
 
     commands = [
+        BotCommand(command="work", description="📅 Рабочий график на 20 дней"),
         BotCommand(command="top", description="🏆 Зал славы казино"),
         BotCommand(command="inventory", description="🎒 Мой инвентарь"),
         BotCommand(command="get_item", description="🎁 Купить случайный предмет (10 фишек)"),
