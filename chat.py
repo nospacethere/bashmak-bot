@@ -12,7 +12,8 @@ async def handle_message(message: types.Message):
         return
 
     cid = message.chat.id
-    await chats_col.update_one({'chat_id': cid}, {'$set': {'last_seen': datetime.datetime.now(pytz.utc)}}, upsert=True)
+    # Legacy chat activity tracking is temporarily disabled.
+    # await chats_col.update_one({'chat_id': cid}, {'$set': {'last_seen': datetime.datetime.now(pytz.utc)}}, upsert=True)
     text = message.text
 
     url_pattern = r'https?://[^\s]+'
@@ -54,6 +55,9 @@ async def handle_message(message: types.Message):
         else:
             await message.reply("Не удалось скачать это видео. Либо ссылка битая, либо оно защищено. 😼")
         return
+
+    # Legacy AI replies and horoscope conversations are temporarily disabled.
+    return
 
     bot_obj = await bot.get_me()
 

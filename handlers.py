@@ -1,10 +1,13 @@
 import datetime, random, pytz
-from aiogram import types
+from aiogram import types, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from config import bot, dp, scores_col, inventories_col, spin_counts_col, game_state_col, amulets_col, hof_col, chats_col, ITEMS, user_history
 from utils import calculate_win, get_leaderboard_text, handle_vampire_amulet, get_casino_chat_id, get_horoscope_chat_id, build_horoscope_message, build_work_schedule_message
 from items import use_item_logic
+
+# Keep legacy handlers registered separately; this router is not included in dp.
+legacy_router = Router(name="legacy_games_and_horoscopes")
 
 WELCOME_TEXT = """😼 Добро пожаловать в подпольное казино «Гемблинг Башмак»!
 
@@ -51,7 +54,7 @@ WELCOME_TEXT = """😼 Добро пожаловать в подпольное �
 async def cmd_work(message: types.Message):
     await message.answer(build_work_schedule_message(), parse_mode="HTML")
 
-@dp.message(Command("inventory"))
+@legacy_router.message(Command("inventory"))
 async def cmd_inventory(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -70,7 +73,7 @@ async def cmd_inventory(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(text, reply_markup=keyboard, parse_mode=None)
 
-@dp.callback_query(lambda c: c.data and c.data.startswith("use_item:"))
+@legacy_router.callback_query(lambda c: c.data and c.data.startswith("use_item:"))
 async def process_use_item_callback(callback_query: CallbackQuery):
     casino_id = await get_casino_chat_id()
     if casino_id and callback_query.message.chat.id != casino_id: return
@@ -78,7 +81,7 @@ async def process_use_item_callback(callback_query: CallbackQuery):
     await callback_query.answer(f"Используем {ITEMS[item_key]['name']}...")
     await use_item_logic(callback_query.from_user, item_key, callback_query.message)
 
-@dp.message(Command("get_item"))
+@legacy_router.message(Command("get_item"))
 async def cmd_get_item(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -105,7 +108,7 @@ async def cmd_get_item(message: types.Message):
     new_balance = (await scores_col.find_one({"user_id": user_id})).get('balance', 'N/A')
     await message.answer(f"Вы потратили {cost} фишек и получили: {ITEMS[item_key]['name']}!\nВаш новый баланс: {new_balance} фишек. 🎰")
 
-@dp.message(Command("use"))
+@legacy_router.message(Command("use"))
 async def cmd_use(message: types.Message, command: CommandObject):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -115,7 +118,7 @@ async def cmd_use(message: types.Message, command: CommandObject):
     item_key = command.args.strip().lower()
     await use_item_logic(message.from_user, item_key, message)
 
-@dp.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
+@legacy_router.message(lambda m: m.dice and m.dice.emoji == '🎰' and not m.from_user.is_bot)
 async def handle_dice(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -206,7 +209,7 @@ async def handle_dice(message: types.Message):
     else:
         await message.reply(f"{cost_msg}Мимо. {base_change}. Баланс: {new_balance} 🎰")
 
-@dp.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
+@legacy_router.message(lambda m: m.dice and m.dice.emoji == '⚽' and not m.from_user.is_bot)
 async def handle_football(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -240,14 +243,14 @@ async def handle_football(message: types.Message):
     else:
         await message.reply(f"Штанга! Вы промахнулись и теряете {abs(change)} фишек... Баланс: {new_balance} ⚽️")
 
-@dp.message(Command("top"))
+@legacy_router.message(Command("top"))
 async def cmd_top(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
     text = await get_leaderboard_text()
     await message.answer(text)
 
-@dp.message(Command("day"))
+@legacy_router.message(Command("day"))
 async def cmd_day(message: types.Message):
     casino_id = await get_casino_chat_id()
     if casino_id and message.chat.id != casino_id: return
@@ -263,7 +266,7 @@ async def cmd_day(message: types.Message):
     else:
         await message.answer(f"🗓️ Идет {day_number}-й день из 14 игрового сезона.")
 
-@dp.message(Command("hof"))
+@legacy_router.message(Command("hof"))
 async def cmd_hof(message: types.Message, command: CommandObject):
     total = await hof_col.count_documents({})
     if total == 0:
@@ -284,7 +287,7 @@ async def cmd_hof(message: types.Message, command: CommandObject):
         text += f"{medal} {p['name']}: {p['balance']} фишек\n"
     await message.answer(text)
 
-@dp.message(Command("horoscope"))
+@legacy_router.message(Command("horoscope"))
 async def cmd_horoscope(message: types.Message):
     hchat = await get_horoscope_chat_id()
     if hchat and message.chat.id != hchat: return
